@@ -44,12 +44,21 @@ Same flow as the DocScan sibling project:
 3. Build settings: framework preset **None**, build command `npm run build`, output directory `dist`.
 4. Deploy. Point `md.insecure.co.nz` at the resulting Pages project via a CNAME/custom domain.
 
+Cloudflare Pages automatically picks up `public/_headers` (copied to the build output root by Vite) and applies the security headers in it — no extra dashboard configuration needed. Since this app makes zero network calls by design, the CSP is deliberately strict: `connect-src 'none'`, `object-src 'none'`, `frame-ancestors 'none'`. `style-src` needs `'unsafe-inline'` because React sets some inline `style` attributes directly; everything else is `'self'`-only.
+
 ## Tech stack
 
 - **React 18** + **Vite**
 - **pdfjs-dist** — PDF text + layout extraction
 - **mammoth** — DOCX → semantic HTML
 - **jszip** — reserved for the planned image-bundling export (not yet wired up)
+
+## Security
+
+- **No network calls.** This app has no upload endpoint, no telemetry, no third-party scripts — everything happens client-side. The `public/_headers` CSP enforces this at the browser level (`connect-src 'none'`).
+- **No `dangerouslySetInnerHTML`, `innerHTML`, or `eval`/`new Function` anywhere in the codebase.** The DOCX parser runs mammoth's HTML through `DOMParser` to walk it, but only ever reads `.textContent` — a script tag embedded in a malicious DOCX is parsed inert and never rendered or executed. All text reaches the DOM via React children, which escape by default.
+- **pdf.js's worker is bundled locally** (via Vite's `?url` import) rather than loaded from a CDN at runtime, so there's no third-party script in the trust chain at load time.
+- Run `npm audit` before deploying. As of this build: 0 vulnerabilities affecting the production bundle; the only finding is a moderate/high advisory in `esbuild`/`vite`'s **dev server** (arbitrary requests accepted by `npm run dev`), which doesn't ship in the built static output but is worth tracking via `npm audit fix`.
 
 ## Privacy
 
