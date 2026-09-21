@@ -183,6 +183,7 @@ body {
 
 .block-selected { background: #f2ede6; border-left-color: var(--accent); }
 .block-flagged:not(.block-selected) { background: #fdf6ec; }
+.block-table { cursor: default; }
 
 .block-heading .block-text { margin: 0; }
 .block-blockquote { border-left: 3px solid var(--border); font-style: italic; color: var(--text-muted); }

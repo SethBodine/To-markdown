@@ -6,7 +6,7 @@ import TableEditor from './TableEditor.jsx';
 // Editing the text happens inline via contentEditable; editing the *type*
 // happens in the Inspector panel on the right.
 
-export default function BlockView({ block, selected, onSelect, onChange }) {
+export default function BlockView({ block, selected, onSelect, onChange, listNumber }) {
   const flagged = block.confidence < 0.6;
 
   if (block.type === 'table') {
@@ -24,11 +24,18 @@ export default function BlockView({ block, selected, onSelect, onChange }) {
   const className = `block block-${block.type} ${selected ? 'block-selected' : ''} ${
     flagged ? 'block-flagged' : ''
   }`;
+  // `level` means two different things depending on block type: heading
+  // level (1-6) for headings, but indentation depth (0+) for list items.
+  // Only list items should translate that number into visual indent —
+  // applying it to headings too would make an H2 render more indented than
+  // an H1, which is wrong.
+  const isIndentable = block.type === 'bullet' || block.type === 'numbered';
+  const indentPx = isIndentable ? (block.level || 0) * 20 : 0;
 
   return (
-    <div className={className} onClick={onSelect} style={{ paddingLeft: (block.level || 0) * 20 }}>
+    <div className={className} onClick={onSelect} style={{ paddingLeft: indentPx }}>
       {(block.type === 'bullet' || block.type === 'numbered') && (
-        <span className="list-marker">{block.type === 'bullet' ? '•' : '1.'}</span>
+        <span className="list-marker">{block.type === 'bullet' ? '\u2022' : `${listNumber || 1}.`}</span>
       )}
       <Tag
         className="block-text"

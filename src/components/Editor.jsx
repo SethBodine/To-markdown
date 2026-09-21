@@ -2,9 +2,8 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import BlockView from './BlockView.jsx';
 import Inspector from './Inspector.jsx';
 import PdfSourceView from './PdfSourceView.jsx';
-import { insertTableAtRegion } from '../lib/blockModel.js';
+import { insertTableAtRegion, makeTableBlock } from '../lib/blockModel.js';
 import { extractTableFromRegion } from '../lib/pdfTableRegion.js';
-import { makeTableBlock } from '../lib/blockModel.js';
 
 // Undo/redo is a simple stack of full block-array snapshots. The block model
 // is small enough (a few hundred blocks for a long document) that this is
@@ -52,6 +51,29 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
   const selectedBlock = useMemo(() => blocks.find((b) => b.id === selectedId) || null, [blocks, selectedId]);
 
   const lowConfidenceCount = useMemo(() => blocks.filter((b) => b.confidence < 0.6).length, [blocks]);
+
+  // The editor rendered every numbered-list item as a literal "1." — correct
+  // in the final markdown export (CommonMark renderers auto-number), but
+  // wrong as a WYSIWYG preview: two consecutive list items both showing "1."
+  // looks broken even though the exported file is fine. Compute a real
+  // running number per contiguous run of numbered items at the same level.
+  const listNumbers = useMemo(() => {
+    const map = new Map();
+    let counter = 0;
+    let prevLevel = null;
+    for (const b of blocks) {
+      if (b.type === 'numbered') {
+        const level = b.level || 0;
+        counter = prevLevel === level ? counter + 1 : 1;
+        map.set(b.id, counter);
+        prevLevel = level;
+      } else {
+        counter = 0;
+        prevLevel = null;
+      }
+    }
+    return map;
+  }, [blocks]);
 
   // The core of "select a section in the PDF and say this is a table": the
   // region comes back in PDF coordinate space from PdfSourceView, gets turned
@@ -123,6 +145,7 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
                 selected={block.id === selectedId}
                 onSelect={() => setSelectedId(block.id)}
                 onChange={(patch) => updateBlock(block.id, patch)}
+                listNumber={listNumbers.get(block.id)}
               />
             ))}
           </div>
