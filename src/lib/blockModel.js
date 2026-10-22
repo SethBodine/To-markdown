@@ -35,6 +35,9 @@ export function makeBlock(partial) {
     rows: null,
     headerRow: null,
     headerCol: null,
+    isTitle: false, // Word "Title" style paragraph
+    titleApplied: false, // Title has been promoted to H1
+    titleShift: 0, // 1 = heading moved down a level, -1 = was H6 and could not move
     confidence: 1,
     source: { format: 'unknown', page: null },
     ...partial,
@@ -96,4 +99,50 @@ export function insertTableAtRegion(blocks, tableBlock, pageNum, regionBbox) {
   }
   kept.splice(insertIndex ?? kept.length, 0, tableBlock);
   return kept;
+}
+
+// ---- "Use document Title as H1" option (Word documents) -------------------
+//
+// Word's Title style has no Markdown equivalent of its own. When a document
+// has one, the person can choose to promote it to H1; every other heading then
+// moves down a level (H1 -> H2 ... H5 -> H6) so the outline stays consistent.
+// H6 has nowhere to go, so it stays H6 and is counted so the UI can say so.
+// Both directions are reversible, and both go through the editor's undo stack.
+
+export function titleBlocks(blocks) {
+  return blocks.filter((b) => b.isTitle);
+}
+
+export function titleAsH1Active(blocks) {
+  return blocks.some((b) => b.isTitle && b.titleApplied);
+}
+
+export function clampedHeadingCount(blocks) {
+  return blocks.filter((b) => b.titleShift === -1).length;
+}
+
+export function applyTitleAsH1(blocks) {
+  return blocks.map((b) => {
+    if (b.isTitle && !b.titleApplied) {
+      return { ...b, type: 'heading', level: 1, titleApplied: true, confidence: 1 };
+    }
+    if (b.type === 'heading' && !b.isTitle && !b.titleShift) {
+      const level = Math.min(6, (b.level || 1) + 1);
+      return { ...b, level, titleShift: level === b.level ? -1 : 1 };
+    }
+    return b;
+  });
+}
+
+export function revertTitleAsH1(blocks) {
+  return blocks.map((b) => {
+    if (b.isTitle && b.titleApplied) {
+      return { ...b, type: 'paragraph', level: 0, titleApplied: false };
+    }
+    if (b.type === 'heading' && b.titleShift === 1) {
+      return { ...b, level: Math.max(1, (b.level || 2) - 1), titleShift: 0 };
+    }
+    if (b.titleShift === -1) return { ...b, titleShift: 0 };
+    return b;
+  });
 }

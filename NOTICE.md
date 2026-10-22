@@ -1,6 +1,6 @@
 # Third-party notices
 
-This project is MIT-licensed (see LICENSE) and bundles the following
+This project is MIT-licensed (see LICENSE.md) and bundles the following
 open-source dependencies. All are permissively licensed; none impose
 copyleft obligations on this project.
 

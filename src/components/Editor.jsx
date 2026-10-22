@@ -2,8 +2,20 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import BlockView from './BlockView.jsx';
 import Inspector from './Inspector.jsx';
 import PdfSourceView from './PdfSourceView.jsx';
-import { insertTableAtRegion, makeTableBlock } from '../lib/blockModel.js';
-import { extractTableFromRegion } from '../lib/pdfTableRegion.js';
+import {
+  insertTableAtRegion,
+  makeTableBlock,
+  titleBlocks,
+  titleAsH1Active,
+  clampedHeadingCount,
+  applyTitleAsH1,
+  revertTitleAsH1,
+} from '../lib/blockModel.js';
+// extractTableFromRegion is imported dynamically inside handleCreateTableFromRegion,
+// not statically here — it transitively pulls in pdfParser.js and all of
+// pdf.js, and Editor.jsx renders for every format, not just PDF. A static
+// import here would put pdf.js in the initial bundle even for someone who
+// only ever converts an HTML file.
 
 // Undo/redo is a simple stack of full block-array snapshots. The block model
 // is small enough (a few hundred blocks for a long document) that this is
@@ -52,6 +64,16 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
 
   const lowConfidenceCount = useMemo(() => blocks.filter((b) => b.confidence < 0.6).length, [blocks]);
 
+  // "Use document Title as H1": offered only when the source (a Word document)
+  // actually contains Title-styled paragraphs. Ticking promotes them to H1 and
+  // moves every other heading down one level; unticking puts it all back.
+  const titleCount = useMemo(() => titleBlocks(blocks).length, [blocks]);
+  const titleActive = useMemo(() => titleAsH1Active(blocks), [blocks]);
+  const clampedCount = useMemo(() => clampedHeadingCount(blocks), [blocks]);
+  const toggleTitleAsH1 = (checked) => {
+    commit(checked ? applyTitleAsH1(blocks) : revertTitleAsH1(blocks));
+  };
+
   // The editor rendered every numbered-list item as a literal "1." — correct
   // in the final markdown export (CommonMark renderers auto-number), but
   // wrong as a WYSIWYG preview: two consecutive list items both showing "1."
@@ -84,6 +106,7 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
     async (pageNum, regionBbox) => {
       setTableBusy(true);
       try {
+        const { extractTableFromRegion } = await import('../lib/pdfTableRegion.js');
         const { rows, bbox } = await extractTableFromRegion(pdfDoc, pageNum, regionBbox);
         if (!rows.length) return;
 
@@ -106,6 +129,25 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
 
   return (
     <div className="editor">
+      {titleCount > 0 && view === 'structured' && (
+        <label className="option-bar">
+          <input
+            type="checkbox"
+            checked={titleActive}
+            onChange={(e) => toggleTitleAsH1(e.target.checked)}
+          />
+          <span>
+            <strong>Use the document Title as H1.</strong> This Word document has a Title style
+            {titleCount > 1 ? ` (${titleCount} paragraphs)` : ''}. Ticking this makes it a top-level
+            heading and moves every other heading down one level (H1 to H2, H2 to H3, and so on).
+            {titleActive && clampedCount > 0
+              ? ` ${clampedCount} heading${clampedCount === 1 ? ' was' : 's were'} already H6, so ${
+                  clampedCount === 1 ? 'it stays' : 'they stay'
+                } at H6.`
+              : ''}
+          </span>
+        </label>
+      )}
       <div className="editor-toolbar">
         <button className="btn" onClick={undo} disabled={!historyRef.current.past.length}>
           Undo

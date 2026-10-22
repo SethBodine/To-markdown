@@ -15,6 +15,9 @@ export async function parseDocx(arrayBuffer) {
     {
       // Keeps simple inline formatting so we can detect bold/italic runs.
       styleMap: [
+        // Word's Title style: tagged so the editor can offer "Title as H1".
+        "p[style-name='Title'] => p.docx-title:fresh",
+        "p.Title => p.docx-title:fresh",
         "p[style-name='Heading 1'] => h1:fresh",
         "p[style-name='Heading 2'] => h2:fresh",
         "p[style-name='Heading 3'] => h3:fresh",

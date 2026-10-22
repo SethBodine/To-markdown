@@ -1,15 +1,14 @@
-import { useCallback, useState } from 'react';
-import { parseDocx } from './lib/parsers/docxParser.js';
-import { parseOdt } from './lib/parsers/odtParser.js';
-import { parseHtml } from './lib/parsers/htmlParser.js';
-import { parseMarkdown } from './lib/parsers/markdownParser.js';
-import { parseEpub } from './lib/parsers/epubParser.js';
-import { parseXlsx } from './lib/parsers/xlsxParser.js';
-import { loadPdfDocument, extractPdfLines } from './lib/parsers/pdfParser.js';
-import { classifyPdfLines } from './lib/classifier.js';
+import { useCallback, useEffect, useState } from 'react';
 import { blocksToMarkdown } from './lib/markdownExport.js';
 import Editor from './components/Editor.jsx';
 import './App.css';
+
+// Every format reader is loaded on demand (see handleFile below) rather than
+// imported statically here. Each reader pulls in a real dependency — pdf.js,
+// mammoth, jszip, remark/unified, read-excel-file — and someone converting
+// one HTML file has no reason to download code for the other five formats
+// too. Dynamic import() makes Vite split each reader into its own chunk,
+// fetched only when that specific format is actually opened.
 
 // Zip-based formats (docx/odt/epub/xlsx) all start with the same magic
 // bytes ("PK", the ZIP signature) regardless of the file extension someone
@@ -34,6 +33,24 @@ export default function App() {
   const [notices, setNotices] = useState([]);
   const [pdfDoc, setPdfDoc] = useState(null); // kept alive so the source view can re-render pages on demand
 
+  // Safety net for the whole page: without this, dropping a file anywhere
+  // outside the two designated drop targets (the idle-state Dropzone, or the
+  // "New file" control in the editor header) makes the browser navigate away
+  // to display the raw file — silently destroying whatever the person was
+  // editing, with zero warning. The two specific drop targets already call
+  // preventDefault() themselves; this only stops the *default* browser
+  // behavior everywhere else on the page, it never reads or processes the
+  // file itself.
+  useEffect(() => {
+    const preventDefault = (e) => e.preventDefault();
+    window.addEventListener('dragover', preventDefault);
+    window.addEventListener('drop', preventDefault);
+    return () => {
+      window.removeEventListener('dragover', preventDefault);
+      window.removeEventListener('drop', preventDefault);
+    };
+  }, []);
+
   const handleFile = useCallback(async (file) => {
     if (!file) return;
     setStatus('parsing');
@@ -55,17 +72,24 @@ export default function App() {
       }
 
       setPdfDoc(null);
+      let resultBlocks = [];
 
       if (ext === 'docx') {
+        const { parseDocx } = await import('./lib/parsers/docxParser.js');
         const { blocks: parsed, warnings: w } = await parseDocx(buffer);
+        resultBlocks = parsed;
         setBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'odt') {
+        const { parseOdt } = await import('./lib/parsers/odtParser.js');
         const { blocks: parsed, warnings: w } = await parseOdt(buffer);
+        resultBlocks = parsed;
         setBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'epub') {
+        const { parseEpub } = await import('./lib/parsers/epubParser.js');
         const { blocks: parsed, warnings: w } = await parseEpub(buffer);
+        resultBlocks = parsed;
         setBlocks(parsed);
         setWarnings(w);
         setNotices(['Images inside EPUB chapters are not extracted yet — see the README roadmap.']);
@@ -73,34 +97,55 @@ export default function App() {
         if (ext === 'xls') {
           throw new Error('Legacy .xls files are not supported — please save as .xlsx first.');
         }
+        const { parseXlsx } = await import('./lib/parsers/xlsxParser.js');
         const { blocks: parsed, warnings: w } = await parseXlsx(buffer);
+        resultBlocks = parsed;
         setBlocks(parsed);
         setWarnings(w);
         setNotices([
           'Spreadsheets have no concept of a "header row" in the file itself — the first row of each sheet is assumed to be the header. Check this in the table editor if it looks wrong.',
         ]);
       } else if (ext === 'html' || ext === 'htm') {
+        const { parseHtml } = await import('./lib/parsers/htmlParser.js');
         const text = new TextDecoder('utf-8').decode(buffer);
         const { blocks: parsed, warnings: w } = await parseHtml(text);
+        resultBlocks = parsed;
         setBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'md' || ext === 'markdown') {
+        const { parseMarkdown } = await import('./lib/parsers/markdownParser.js');
         const text = new TextDecoder('utf-8').decode(buffer);
         const { blocks: parsed, warnings: w } = await parseMarkdown(text);
+        resultBlocks = parsed;
         setBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'pdf') {
+        const { loadPdfDocument, extractPdfLines } = await import('./lib/parsers/pdfParser.js');
+        const { classifyPdfLines } = await import('./lib/classifier.js');
         const doc = await loadPdfDocument(buffer);
         const lines = await extractPdfLines(doc);
-        setBlocks(classifyPdfLines(lines));
+        const parsed = classifyPdfLines(lines);
+
+        const totalChars = lines.reduce((sum, l) => sum + l.text.length, 0);
+        const avgCharsPerPage = totalChars / doc.numPages;
+
+        if (parsed.length === 0) {
+          // A specific, more useful message than the generic "no content
+          // found" below — this is almost certainly a scanned/image PDF,
+          // and the person should know that's *why*, not just that it failed.
+          throw new Error(
+            'No text could be read from this PDF — it’s likely a scanned/image-only document, which this tool can’t read without OCR.'
+          );
+        }
+
+        resultBlocks = parsed;
+        setBlocks(parsed);
         setPdfDoc(doc);
 
         setNotices([
           'This reads the text layer already inside the PDF — it doesn’t do OCR. Scanned pages saved as images will come through blank or garbled.',
         ]);
 
-        const totalChars = lines.reduce((sum, l) => sum + l.text.length, 0);
-        const avgCharsPerPage = totalChars / doc.numPages;
         if (avgCharsPerPage < 20) {
           setWarnings([
             'Almost no text was found in this PDF — it’s likely a scanned/image-only document, which this tool can’t read without OCR.',
@@ -113,6 +158,13 @@ export default function App() {
       } else {
         throw new Error(`Unsupported file type: .${ext}`);
       }
+
+      if (resultBlocks.length === 0) {
+        throw new Error(
+          'No content was found to convert — this file appears to be empty, or nothing in it could be read as text.'
+        );
+      }
+
       setStatus('ready');
     } catch (err) {
       console.error(err);
@@ -154,9 +206,7 @@ export default function App() {
         </div>
         {status === 'ready' && (
           <div className="header-actions">
-            <button className="btn" onClick={reset}>
-              Start over
-            </button>
+            <HeaderFileControl onFile={handleFile} />
             <button className="btn btn-primary" onClick={handleDownload}>
               Download .md
             </button>
@@ -186,14 +236,18 @@ export default function App() {
           {notices.length > 0 && (
             <div className="notices">
               {notices.map((n, i) => (
-                <p key={i}>ℹ {n}</p>
+                <p key={i}>
+                  <strong>Note:</strong> {n}
+                </p>
               ))}
             </div>
           )}
           {warnings.length > 0 && (
             <div className="warnings">
               {warnings.map((w, i) => (
-                <p key={i}>⚠ {w}</p>
+                <p key={i}>
+                  <strong>Warning:</strong> {w}
+                </p>
               ))}
             </div>
           )}
@@ -201,6 +255,39 @@ export default function App() {
         </>
       )}
     </div>
+  );
+}
+
+// A compact drag-and-drop target that replaces "Start over" in the editor
+// header: dropping (or choosing) a new file loads it directly, in one step,
+// rather than making the person click "Start over" first and then face the
+// full-size Dropzone again just to pick another file.
+function HeaderFileControl({ onFile }) {
+  const [dragOver, setDragOver] = useState(false);
+
+  return (
+    <label
+      className={`header-drop-target ${dragOver ? 'header-drop-target-active' : ''}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        onFile(e.dataTransfer.files[0]);
+      }}
+      title="Drop a file here, or click to choose one — replaces the current document"
+    >
+      {dragOver ? 'Drop to convert' : 'New file'}
+      <input
+        type="file"
+        accept=".pdf,.docx,.doc,.odt,.html,.htm,.md,.markdown,.epub,.xlsx,.xls"
+        style={{ display: 'none' }}
+        onChange={(e) => onFile(e.target.files[0])}
+      />
+    </label>
   );
 }
 

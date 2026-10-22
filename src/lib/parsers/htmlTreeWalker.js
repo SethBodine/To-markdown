@@ -63,6 +63,11 @@ function elementToBlock(node, ctx) {
     // (e.g. "This is a **bold** word") which the block model has no
     // representation for. Better to lose the emphasis on part of a
     // paragraph than to wrongly bold the whole thing.
+    if (node.classList && node.classList.contains('docx-title')) {
+      // Word "Title" style: kept as a paragraph until the person opts in to
+      // treating it as H1 (see applyTitleAsH1 in blockModel.js).
+      return makeBlock({ type: 'paragraph', text, isTitle: true, confidence: ctx.confidence, source });
+    }
     const onlyChild = node.children.length === 1 ? node.children[0] : null;
     const wholeTextMatches = onlyChild && onlyChild.textContent.trim() === text;
     const bold = wholeTextMatches && onlyChild.tagName === 'STRONG';
