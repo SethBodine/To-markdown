@@ -30,11 +30,22 @@ export function makeBlock(partial) {
     type: 'paragraph',
     level: 0,
     text: '',
+    md: null, // inline Markdown source when the text has formatting/links
     bold: false,
     italic: false,
     rows: null,
     headerRow: null,
     headerCol: null,
+    align: null, // table column alignment: ('left'|'center'|'right'|null)[]
+    lang: '', // code block language
+    checked: false, // task list item
+    headingId: '', // {#custom-id}
+    label: '', // footnote label
+    href: '', // image URL
+    alt: '', // image alt text
+    title: '', // image title
+    desc: '', // definition list: the definition (plain)
+    descMd: null, // definition list: the definition (inline Markdown)
     isTitle: false, // Word "Title" style paragraph
     titleApplied: false, // Title has been promoted to H1
     titleShift: 0, // 1 = heading moved down a level, -1 = was H6 and could not move
@@ -44,12 +55,13 @@ export function makeBlock(partial) {
   };
 }
 
-export function makeTableBlock(rows, { headerRow = 0, headerCol = null, confidence = 0.6, source } = {}) {
+export function makeTableBlock(rows, { headerRow = 0, headerCol = null, align = null, confidence = 0.6, source } = {}) {
   return makeBlock({
     type: 'table',
     rows,
     headerRow: rows.length ? headerRow : null,
     headerCol,
+    align,
     confidence,
     source,
   });
@@ -65,6 +77,7 @@ export const BLOCK_TYPES = [
   { value: 'paragraph', label: 'Paragraph', type: 'paragraph', level: 0 },
   { value: 'bullet', label: 'Bulleted list item', type: 'bullet', level: 0 },
   { value: 'numbered', label: 'Numbered list item', type: 'numbered', level: 0 },
+  { value: 'task', label: 'Task list item', type: 'task', level: 0 },
   { value: 'blockquote', label: 'Quote', type: 'blockquote', level: 0 },
   { value: 'code', label: 'Code block', type: 'code', level: 0 },
 ];
@@ -145,4 +158,61 @@ export function revertTitleAsH1(blocks) {
     if (b.titleShift === -1) return { ...b, titleShift: 0 };
     return b;
   });
+}
+
+// ---- Block kinds and editing helpers --------------------------------------
+
+export const TEXT_TYPES = new Set(['heading', 'paragraph', 'bullet', 'numbered', 'task', 'blockquote', 'footnote', 'definition']);
+export const LIST_TYPES = new Set(['bullet', 'numbered', 'task']);
+// Types the "Type" dropdown can convert between.
+export const TYPE_CHANGEABLE = new Set(['heading', 'paragraph', 'bullet', 'numbered', 'task', 'blockquote', 'code']);
+
+export const isTextBlock = (b) => TEXT_TYPES.has(b.type);
+
+export function applyBlockType(block, value) {
+  const def = BLOCK_TYPES.find((t) => t.value === value);
+  if (!def) return block;
+  const next = { ...block, type: def.type, level: def.level, confidence: 1 };
+  if (LIST_TYPES.has(block.type) && LIST_TYPES.has(def.type)) next.level = block.level || 0;
+  // Code is raw text: drop inline formatting going in, and keep the plain text coming out.
+  if (def.type === 'code' || block.type === 'code') next.md = null;
+  return next;
+}
+
+export function cloneBlock(b) {
+  return {
+    ...b,
+    id: nextId(),
+    rows: b.rows ? b.rows.map((r) => [...r]) : null,
+    align: b.align ? [...b.align] : null,
+  };
+}
+
+// Blocks created from the Insert panel.
+export function createBlock(kind, opts = {}) {
+  const source = { format: 'edited', page: null };
+  switch (kind) {
+    case 'heading': return makeBlock({ type: 'heading', level: opts.level || 2, source });
+    case 'paragraph': return makeBlock({ type: 'paragraph', source });
+    case 'quote': return makeBlock({ type: 'blockquote', source });
+    case 'bullet': return makeBlock({ type: 'bullet', source });
+    case 'numbered': return makeBlock({ type: 'numbered', source });
+    case 'task': return makeBlock({ type: 'task', source });
+    case 'code': return makeBlock({ type: 'code', lang: opts.lang || '', source });
+    case 'hr': return makeBlock({ type: 'hr', source });
+    case 'image': return makeBlock({ type: 'image', alt: opts.alt || '', href: opts.href || '', source });
+    case 'definition': return makeBlock({ type: 'definition', source });
+    case 'footnote': return makeBlock({ type: 'footnote', label: opts.label || '1', source });
+    case 'table': {
+      const rows = Math.max(1, Math.min(50, opts.rows || 3));
+      const cols = Math.max(1, Math.min(20, opts.cols || 3));
+      return makeBlock({
+        type: 'table',
+        rows: Array.from({ length: rows }, () => Array(cols).fill('')),
+        headerRow: 0,
+        source,
+      });
+    }
+    default: return makeBlock({ type: 'paragraph', source });
+  }
 }

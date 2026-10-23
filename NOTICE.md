@@ -16,6 +16,7 @@ copyleft obligations on this project.
 | remark-gfm | 4.0.1 | MIT |
 | mdast-util-to-string | 4.0.0 | MIT |
 | read-excel-file | 9.3.10 | MIT |
+| highlight.js | 11.12.0 | BSD-3-Clause |
 
 ## A note on pandoc
 

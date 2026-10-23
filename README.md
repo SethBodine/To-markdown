@@ -25,7 +25,7 @@ A fully client-side document → Markdown converter with a WYSIWYG structure edi
 1. **Parse** — each format has its own reader (see table above), but every reader converges on the same output shape.
 2. **Normalize** — all formats get converted into one shared block model (`src/lib/blockModel.js`): a flat list of `{ type, level, text, confidence, ... }` blocks. Nothing downstream cares which format or reader a block came from. DOCX, HTML, and EPUB share a common tree-walker (`src/lib/parsers/htmlTreeWalker.js`) since EPUB chapters and mammoth's DOCX output are both HTML trees at that point.
 3. **Classify** (PDF only — every other format states its own structure explicitly) — `src/lib/classifier.js` clusters font sizes to guess heading levels, detects bullet/numbered list markers and indentation, and assigns a **confidence score** to every guess. Explicit structure from other formats (a real DOCX heading style, a real ODT table) gets `confidence: 1.0` or close to it — it isn't a guess and the editor shouldn't flag it as one.
-4. **Edit** — the WYSIWYG editor (`src/components/Editor.jsx`) renders each block using its assigned style, lets you click any block to select it, and shows a right-hand inspector to change its type, indent level, or formatting. Blocks below a confidence threshold are visually flagged so you know what to check first. Detected tables open in a dedicated grid editor where you can toggle header rows/columns and edit cells directly. A compact "New file" control in the header (drag a file onto it, or click to choose) replaces the current document in one step, without leaving the editor.
+4. **Edit** — the editor renders each block the way it will read once exported, with the text editable in place (see Editing below). Blocks below a confidence threshold are visually flagged so you know what to check first, and the flag clears once you change a block. Detected tables open in a grid editor where you can mark header rows/columns, set column alignment and edit cells.
 5. **Export** — `src/lib/markdownExport.js` walks the (now user-corrected) block model and emits clean Markdown, downloaded as a `.md` file.
 
 ### Word "Title" style: optional H1
@@ -38,11 +38,35 @@ This project's reader architecture — many independent format readers, each pro
 
 Pandoc's own documentation makes a point worth repeating here: conversions from formats more expressive than the target's document model are inherently lossy, and complex tables may not fit a simple document model. That's exactly why the WYSIWYG correction layer exists on top of every reader in this project, not just the PDF one — a reader's best guess is a starting point, not a guarantee.
 
+## Editing
+
+Everything on the page is editable in place; there is no separate edit mode.
+
+**Selecting blocks.** Click a block, **Ctrl/Cmd + click** to add or remove one, **Shift + click** for a range, or tick the box at its left. **Ctrl/Cmd + A** selects everything and **Esc** clears. With several blocks selected the Properties panel changes the type of all of them, toggles bold/italic, indents list items, merges them into one block, moves, duplicates or deletes them.
+
+**Editing text.** Type directly. **Enter** splits a block at the caret (on an empty list item it outdents, then leaves the list), **Backspace** at the start joins a block to the one above (or turns a heading/list item back into a paragraph), **Tab / Shift+Tab** indents a list item, and the arrow keys move between blocks. Pasting inserts plain text only. Undo and Redo cover every change, including bulk ones.
+
+**Insert tab** (laid out like the [Markdown cheat sheet](https://www.markdownguide.org/cheat-sheet/)): select text to make it bold, italic, strikethrough, code, highlight, subscript or superscript, or to turn it into a link; add a footnote (the `[^1]` reference and its definition at the end); and add a heading (H1-H6), paragraph, quote, bullet, numbered or task item, horizontal rule, definition, fenced code block with a language, table of any size, or image. New blocks go after or before the selection, or at the end. Emoji shortcodes are not offered; typing `:joy:` works as ordinary text.
+
+**Reordering.** Drag the grip at the left of a block; if several blocks are selected they move together. Move up / Move down in the panel does the same from the keyboard.
+
+**Markdown tab.** Switch between Structured and Markdown at any time. The Markdown tab shows the document as Markdown and is editable; what you type is read back into blocks as you go (and when you leave the tab), and the whole session is a single Undo step. Opening the tab and switching back without typing changes nothing. The tab shows the document itself: export options (below) are applied only when you download.
+
+**Code blocks.** Each code block has a language box on the block itself (type any name, or pick one from the list) and is syntax-highlighted for common languages. Long lines scroll sideways inside the block rather than widening the page.
+
+**Selecting text and changing type.** Select part of a line and change the Type in the Properties panel, and only that text changes: the block is split into before, selection and after. If the whole line is selected, or only the caret is in it, the whole block changes. Multi-select bulk changes always apply to whole blocks.
+
+**Adding at the end.** The empty space below the last block is clickable: click it to start a new paragraph there.
+
+**Tick boxes.** Tick boxes appear when you hover a block; the Tick boxes button in the toolbar keeps them visible on every block.
+
+**Export options** (header, applied only to the downloaded file; a live preview is shown): shift every heading level up or down (levels are held at H1 and H6, and you are told how many were), and add YAML front matter (title, author, date, tags, description).
+
 ## Performance
 
-Every format reader is loaded via a dynamic `import()` at the point it's actually needed, not bundled statically into the initial page load. Each reader pulls in a real dependency (pdf.js, mammoth, jszip, remark/unified, read-excel-file), and someone converting one small HTML file has no reason to download code for the other six formats. This cut the initial JS bundle from ~1,078 KB to ~163 KB (gzipped: ~330 KB → ~53 KB); pdf.js in particular (the largest dependency by far) is now only fetched at all if a PDF is opened.
+Every format reader is loaded via a dynamic `import()` at the point it's actually needed, not bundled statically into the initial page load. Each reader pulls in a real dependency (pdf.js, mammoth, jszip, remark/unified, read-excel-file), and someone converting one small HTML file has no reason to download code for the other six formats. This keeps the initial JS bundle at about 202 KB (gzipped about 64 KB) plus 15 KB of CSS, against about 1,078 KB if everything were in one bundle; pdf.js (the largest dependency by far) is only fetched if a PDF is opened, and the syntax highlighter only when a code block has a language.
 
-The block-list editor has no virtualization (every block is a real DOM node), which is worth knowing if this ever needs to handle unusually large documents. Tested up to ~4,000 blocks (a very long document) with no noticeable degradation — parse+render in under a second, sub-150ms click/typing response — so this hasn't been a practical problem, but it's a reasonable thing to revisit if real-world usage produces much larger documents than that.
+The block list has no virtualization (every block is a real DOM node). Measured on a modest shared CPU: a 4,000-block Word document opens in about 3 seconds and a 2,000-block Markdown file in about 3 seconds (the Markdown parser is about a third of that); once open, selecting, typing and select-all stay under half a second. The editing features added roughly 15-20% to load time compared with the earlier read-only build, measured side by side on the same machine. Absolute times depend heavily on the machine, so treat these as relative figures. Virtualizing the list is the obvious next step if much larger documents matter.
 
 ## Known limitations
 
@@ -51,10 +75,11 @@ The block-list editor has no virtualization (every block is a real DOM node), wh
 - **PDF paragraph merging is heuristic.** Consecutive same-size text lines on the same page are merged into one paragraph. This can occasionally merge or split paragraphs incorrectly — use the WYSIWYG editor to fix by editing the block's text directly.
 - **`.doc` and `.xls` (legacy binary formats) are not supported.** Both are much harder to parse client-side than their modern zipped-XML successors. Users are asked to save as `.docx`/`.xlsx` first.
 - **Only Word's "Title" style is recognised for the Title option** (matched by style name or style ID). "Subtitle" and custom title styles come through as ordinary paragraphs.
-- **Inline formatting is block-level only.** A paragraph can be marked bold/italic as a whole, but a single bold *word* inside an otherwise plain paragraph has no representation in the block model — the emphasis is dropped rather than (incorrectly) applied to the whole paragraph. This was an actual bug caught during testing (partial inline bold was wrongly bolding entire paragraphs in the DOM-based readers) and fixed by only setting `bold`/`italic` when a single styled child accounts for the block's *entire* text content.
-- **EPUB/HTML images are not extracted** — an `<img>` tag becomes a flagged, low-confidence placeholder line (`[image: alt text]`) rather than being silently dropped.
+- **Inline formatting is kept for DOCX, HTML, EPUB and Markdown, but not for ODT, PDF or XLSX**, whose readers still produce plain text per block (you can add formatting yourself in the editor). Table cells are plain text: no links or emphasis inside a cell.
+- **The Markdown tab reads text back into blocks.** Everything the editor can produce round-trips, including heading anchors and definition lists, but raw HTML, reference-style links and nested block quotes are simplified or dropped, and per-block details such as PDF source positions and review flags are reset when the text is re-read.
+- **Changing type on selected text splits the block** (Markdown has no inline heading), so a selected word becomes its own block between the two halves.
+- **Images are referenced, not extracted.** An `<img>` (or a Markdown image) becomes an image block holding its alt text and URL. Pictures embedded inside a DOCX or EPUB have no URL, so they come through as flagged image blocks with the URL left blank for you to fill in or delete. The editor never loads image URLs (nothing leaves your browser), it shows a placeholder.
 - **XLSX header-row detection is a convention, not a fact.** Spreadsheets don't semantically mark a header row the way a real document format does, so the first row of each sheet is assumed to be the header, flagged with middling confidence for review in the table editor.
-- **Images are not yet extracted from DOCX/PDF.** Planned: DOCX images via mammoth's image handler, PDF images via canvas rendering, both bundled into a `.zip` alongside the `.md` file.
 
 ## Local development
 
@@ -91,6 +116,7 @@ Cloudflare Pages automatically picks up `public/_headers` (copied to the build o
 - **mammoth** — DOCX → semantic HTML (BSD-2-Clause)
 - **jszip** — ZIP handling for ODT/EPUB/XLSX-adjacent formats (MIT)
 - **unified** / **remark-parse** / **remark-gfm** — Markdown parsing, including GFM tables (all MIT)
+- **highlight.js** — syntax highlighting in code blocks, loaded on demand (BSD-3-Clause)
 - **read-excel-file** — XLSX reading (MIT) — see `NOTICE.md` for why this was chosen over the more common `xlsx` (SheetJS) package
 
 Full dependency license list in `NOTICE.md`.
@@ -103,6 +129,9 @@ Full dependency license list in `NOTICE.md`.
 - **The XLSX reader was deliberately chosen to avoid a known high-severity advisory.** The more widely-used SheetJS `xlsx` npm package has an unpatched (on npm) prototype-pollution/ReDoS vulnerability in exactly the code path this app exercises — parsing untrusted, user-supplied files. `read-excel-file` was used instead. See `NOTICE.md` for details.
 - Run `npm audit` before deploying. As of this build: **0 vulnerabilities affecting the production bundle** (`npm audit --omit=dev`). The only finding in a full audit is a moderate advisory in `esbuild`/`vite`'s **dev server** (arbitrary requests accepted by `npm run dev`), which doesn't ship in the built static output.
 
+- **Editing is built without `innerHTML`.** Formatted text is turned into DOM nodes with `createElement`/`createTextNode` and back into Markdown when you leave a block. Links are restricted to `http`, `https`, `mailto`, `tel` and relative/anchor addresses (`javascript:`, `data:` and other schemes are refused when you add one and dropped when a file is opened), and pasted content is reduced to plain text.
+- **Syntax-highlighter output is rebuilt, not inserted.** highlight.js returns HTML; it is parsed with `DOMParser` (inert) and copied into new nodes keeping only text and `span` elements with highlight classes, so nothing in a code block can become a live element. Checked by typing `<script>` and `<img onerror>` into a code block: it stays text.
+
 ## Privacy
 
 File contents never leave the browser. No upload endpoint exists in this codebase — parsing, classification, editing, and markdown generation all run client-side in JavaScript.
@@ -113,6 +142,8 @@ File contents never leave the browser. No upload endpoint exists in this codebas
 - [ ] Image extraction (DOCX/PDF/EPUB) + `.zip` export with `/images` folder
 - [ ] `.doc`/`.xls` (legacy binary) support
 - [ ] RTF, LaTeX, Org-mode, reStructuredText readers (deferred — see licensing/quality bar in NOTICE.md before adding)
-- [ ] Rich inline formatting (mixed bold/italic runs within one paragraph)
-- [ ] Drag-to-reorder blocks
-- [ ] Export options: front matter, custom heading offset
+- [x] Rich inline formatting (mixed bold/italic runs, links, code, strike, highlight, sub/superscript)
+- [x] Drag-to-reorder blocks
+- [x] Export options: front matter, heading offset
+- [ ] Inline formatting from ODT/PDF/XLSX; links and emphasis inside table cells
+- [ ] Accessibility audit, phone-width layout, browsers other than Chrome

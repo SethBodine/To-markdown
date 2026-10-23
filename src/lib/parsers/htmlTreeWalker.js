@@ -1,4 +1,5 @@
 import { makeBlock, makeTableBlock } from '../blockModel.js';
+import { domToMarkdown, escapeText } from '../inlineMarkdown.js';
 
 // One tree-walker, reused by every reader whose source material is (or gets
 // converted to) an HTML/XHTML DOM tree: DOCX via mammoth's HTML output, plain
@@ -18,24 +19,49 @@ export function elementsToBlocks(containerElement, { format, confidence = 0.9 })
   return blocks;
 }
 
+// Inline Markdown for a block, but only when the text really has formatting or
+// links: plain text stays plain so blocks without markup are untouched.
+function inlineMd(node, text) {
+  const md = domToMarkdown(node).trim();
+  return md !== escapeText(text.replace(/\u00a0/g, ' ')) ? md : null;
+}
+
+function imageBlock(img, ctx) {
+  const src = img.getAttribute('src') || '';
+  // Embedded (data:) images can't be referenced from Markdown, so the block is
+  // created with no URL and flagged for the person to fill in or remove.
+  const href = /^data:/i.test(src) ? '' : src;
+  return makeBlock({
+    type: 'image',
+    alt: img.getAttribute('alt') || '',
+    href,
+    confidence: href ? 0.8 : 0.4,
+    source: { format: ctx.format, page: null },
+  });
+}
+
 function elementToBlock(node, ctx) {
   const tag = node.tagName.toLowerCase();
   const source = { format: ctx.format, page: null };
 
   if (/^h[1-6]$/.test(tag)) {
+    const text = node.textContent.trim();
     return makeBlock({
       type: 'heading',
       level: Number(tag[1]),
-      text: node.textContent.trim(),
+      text,
+      md: node.querySelector('a,code') ? inlineMd(node, text) : null,
       confidence: ctx.confidence,
       source,
     });
   }
 
   if (tag === 'blockquote') {
+    const text = node.textContent.trim();
     return makeBlock({
       type: 'blockquote',
-      text: node.textContent.trim(),
+      text,
+      md: inlineMd(node, text),
       confidence: ctx.confidence - 0.05,
       source,
     });
@@ -55,36 +81,41 @@ function elementToBlock(node, ctx) {
     return makeTableBlock(rows, { headerRow: firstRowIsHeader ? 0 : null, confidence: 0.7, source });
   }
 
+  if (tag === 'hr') return makeBlock({ type: 'hr', confidence: ctx.confidence, source });
+
   if (tag === 'p' || tag === 'div') {
     const text = node.textContent.trim();
-    if (!text) return null;
-    // Only mark the whole block bold/italic if that one child accounts for
-    // the entire text content — otherwise this is a partial inline run
-    // (e.g. "This is a **bold** word") which the block model has no
-    // representation for. Better to lose the emphasis on part of a
-    // paragraph than to wrongly bold the whole thing.
+    if (!text) {
+      // A paragraph holding only pictures (how Word images arrive).
+      const imgs = Array.from(node.querySelectorAll('img'));
+      if (!imgs.length) return null;
+      const blocks = imgs.map((img) => imageBlock(img, ctx));
+      return blocks.length === 1 ? blocks[0] : { multi: blocks };
+    }
     if (node.classList && node.classList.contains('docx-title')) {
       // Word "Title" style: kept as a paragraph until the person opts in to
       // treating it as H1 (see applyTitleAsH1 in blockModel.js).
       return makeBlock({ type: 'paragraph', text, isTitle: true, confidence: ctx.confidence, source });
     }
+    // A paragraph that is entirely one bold/italic run keeps the simple
+    // whole-block flag; anything with partial formatting or links keeps its
+    // inline Markdown instead.
     const onlyChild = node.children.length === 1 ? node.children[0] : null;
     const wholeTextMatches = onlyChild && onlyChild.textContent.trim() === text;
-    const bold = wholeTextMatches && onlyChild.tagName === 'STRONG';
-    const italic = wholeTextMatches && onlyChild.tagName === 'EM';
-    return makeBlock({ type: 'paragraph', text, bold, italic, confidence: ctx.confidence, source });
+    const bold = !!wholeTextMatches && onlyChild.tagName === 'STRONG';
+    const italic = !!wholeTextMatches && onlyChild.tagName === 'EM';
+    const md = bold || italic ? null : inlineMd(node, text);
+    return makeBlock({ type: 'paragraph', text, md, bold, italic, confidence: ctx.confidence, source });
   }
 
   if (tag === 'pre' || tag === 'code') {
-    return makeBlock({ type: 'code', text: node.textContent, confidence: 0.7, source });
+    const codeEl = node.querySelector ? node.querySelector('code') : null;
+    const cls = `${node.className || ''} ${codeEl ? codeEl.className || '' : ''}`;
+    const lang = (/(?:language|lang)-([\w+#.-]+)/.exec(cls) || [])[1] || '';
+    return makeBlock({ type: 'code', text: node.textContent, lang, confidence: 0.7, source });
   }
 
-  if (tag === 'img') {
-    // No image-block type yet (see README roadmap) — record it as a flagged
-    // paragraph rather than silently dropping the reference.
-    const alt = node.getAttribute('alt') || '(image)';
-    return makeBlock({ type: 'paragraph', text: `[image: ${alt}]`, confidence: 0.3, source });
-  }
+  if (tag === 'img') return imageBlock(node, ctx);
 
   // Fallback: treat unknown block-level elements as paragraphs so nothing is
   // silently dropped, but flag them clearly as a low-confidence guess.
@@ -100,11 +131,15 @@ function walkList(listNode, depth, ordered, out, ctx) {
       .map((n) => n.textContent)
       .join('')
       .trim();
+    // Inline Markdown for the item's own text (nested lists removed).
+    const own = li.cloneNode(true);
+    own.querySelectorAll('ul,ol').forEach((n) => n.remove());
     out.push(
       makeBlock({
         type: ordered ? 'numbered' : 'bullet',
         level: depth,
         text: directText,
+        md: inlineMd(own, directText),
         confidence: ctx.confidence,
         source: { format: ctx.format, page: null },
       })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { blocksToMarkdown } from './lib/markdownExport.js';
+import { blocksToMarkdown, countHeadingClamps } from './lib/markdownExport.js';
 import Editor from './components/Editor.jsx';
 import './App.css';
 
@@ -32,6 +32,12 @@ export default function App() {
   const [warnings, setWarnings] = useState([]);
   const [notices, setNotices] = useState([]);
   const [pdfDoc, setPdfDoc] = useState(null); // kept alive so the source view can re-render pages on demand
+  // Export options apply when downloading or previewing; the editor itself is unchanged.
+  const [exportOpts, setExportOpts] = useState({
+    headingOffset: 0,
+    frontMatterOn: false,
+    fm: { title: '', author: '', date: '', tags: '', description: '' },
+  });
 
   // Safety net for the whole page: without this, dropping a file anywhere
   // outside the two designated drop targets (the idle-state Dropzone, or the
@@ -174,7 +180,7 @@ export default function App() {
   }, []);
 
   const handleDownload = useCallback(() => {
-    const markdown = blocksToMarkdown(blocks);
+    const markdown = blocksToMarkdown(blocks, toExportConfig(exportOpts));
     const outName = fileName.replace(/\.[^.]+$/, '') + '.md';
     const blob = new Blob([markdown], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -183,7 +189,7 @@ export default function App() {
     a.download = outName;
     a.click();
     URL.revokeObjectURL(url);
-  }, [blocks, fileName]);
+  }, [blocks, fileName, exportOpts]);
 
   const reset = useCallback(() => {
     setBlocks(null);
@@ -207,6 +213,7 @@ export default function App() {
         {status === 'ready' && (
           <div className="header-actions">
             <HeaderFileControl onFile={handleFile} />
+            <ExportOptions blocks={blocks} opts={exportOpts} setOpts={setExportOpts} fileName={fileName} />
             <button className="btn btn-primary" onClick={handleDownload}>
               Download .md
             </button>
@@ -255,6 +262,71 @@ export default function App() {
         </>
       )}
     </div>
+  );
+}
+
+function toExportConfig(opts) {
+  return { headingOffset: opts.headingOffset, frontMatter: opts.frontMatterOn ? opts.fm : null };
+}
+
+// Front matter and a heading-level offset, applied only to the exported file.
+function ExportOptions({ blocks, opts, setOpts, fileName }) {
+  const [open, setOpen] = useState(false);
+  const setFm = (patch) => setOpts((o) => ({ ...o, fm: { ...o.fm, ...patch } }));
+  const clamped = countHeadingClamps(blocks, opts.headingOffset);
+
+  const toggleFrontMatter = (on) =>
+    setOpts((o) => {
+      if (!on || o.fm.title) return { ...o, frontMatterOn: on };
+      const first = blocks.find((b) => b.type === 'heading' && b.text.trim());
+      return {
+        ...o,
+        frontMatterOn: on,
+        fm: {
+          ...o.fm,
+          title: first ? first.text.trim() : fileName.replace(/\.[^.]+$/, ''),
+          date: o.fm.date || new Date().toLocaleDateString('en-CA'),
+        },
+      };
+    });
+
+  return (
+    <details className="export-options" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="btn">Export options</summary>
+      <div className="export-panel">
+        <label className="field">
+          <span>Shift all heading levels by</span>
+          <select value={opts.headingOffset} onChange={(e) => setOpts((o) => ({ ...o, headingOffset: Number(e.target.value) }))}>
+            {[-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>{n > 0 ? `+${n}` : n} {n === 0 ? '(none)' : n > 0 ? '(deeper)' : '(higher)'}</option>
+            ))}
+          </select>
+        </label>
+        {clamped > 0 && (
+          <p className="panel-msg">{clamped} heading{clamped === 1 ? '' : 's'} would go past H1 or H6 and {clamped === 1 ? 'is' : 'are'} held at the limit.</p>
+        )}
+        <label className="field field-inline">
+          <input type="checkbox" checked={opts.frontMatterOn} onChange={(e) => toggleFrontMatter(e.target.checked)} />
+          <span>Add front matter (YAML)</span>
+        </label>
+        {opts.frontMatterOn && (
+          <div className="fm-fields">
+            {[['title', 'Title'], ['author', 'Author'], ['date', 'Date (YYYY-MM-DD)'], ['tags', 'Tags (comma separated)'], ['description', 'Description']].map(([k, label]) => (
+              <label key={k} className="field">
+                <span>{label}</span>
+                <input type="text" value={opts.fm[k]} onChange={(e) => setFm({ [k]: e.target.value })} />
+              </label>
+            ))}
+          </div>
+        )}
+        {open && (
+          <>
+            <span className="preview-label">Preview of the exported file</span>
+            <pre className="export-preview">{blocksToMarkdown(blocks, toExportConfig(opts)).slice(0, 2500) || '(empty)'}</pre>
+          </>
+        )}
+      </div>
+    </details>
   );
 }
 
