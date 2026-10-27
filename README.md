@@ -1,5 +1,7 @@
 # To Markdown
 
+**Source code:** [github.com/SethBodine/To-markdown](https://github.com/SethBodine/To-markdown)
+
 A fully client-side document → Markdown converter with a WYSIWYG structure editor. No files are ever uploaded to a server — parsing, editing, and export all happen in the browser. Sibling project to [docs.insecure.co.nz](https://docs.insecure.co.nz) (DocScan), intended for deployment at `md.insecure.co.nz`.
 
 ## Supported formats
@@ -42,11 +44,13 @@ Pandoc's own documentation makes a point worth repeating here: conversions from 
 
 Everything on the page is editable in place; there is no separate edit mode.
 
-**Selecting blocks.** Click a block, **Ctrl/Cmd + click** to add or remove one, **Shift + click** for a range, or tick the box at its left. **Ctrl/Cmd + A** selects everything and **Esc** clears. With several blocks selected the Properties panel changes the type of all of them, toggles bold/italic, indents list items, merges them into one block, moves, duplicates or deletes them.
+**Selecting blocks.** Click a block, **Ctrl/Cmd + click** to add or remove one, or tick the box at its left. **Shift + click** (on a block or on its tick box, the two behave identically) selects everything from the last block you clicked or ticked. Blocks you picked one at a time stay selected, and a new Shift range replaces the previous Shift range, so you can widen or shrink it. **Ctrl/Cmd + A** selects everything and **Esc** clears. With several blocks selected, the Properties panel changes the type of all of them, toggles bold/italic, indents list items, links or unlinks them, merges them into one block, and moves, duplicates or deletes them.
 
 **Editing text.** Type directly. **Enter** splits a block at the caret (on an empty list item it outdents, then leaves the list), **Backspace** at the start joins a block to the one above (or turns a heading/list item back into a paragraph), **Tab / Shift+Tab** indents a list item, and the arrow keys move between blocks. Pasting inserts plain text only. Undo and Redo cover every change, including bulk ones.
 
-**Insert tab** (laid out like the [Markdown cheat sheet](https://www.markdownguide.org/cheat-sheet/)): select text to make it bold, italic, strikethrough, code, highlight, subscript or superscript, or to turn it into a link; add a footnote (the `[^1]` reference and its definition at the end); and add a heading (H1-H6), paragraph, quote, bullet, numbered or task item, horizontal rule, definition, fenced code block with a language, table of any size, or image. New blocks go after or before the selection, or at the end. Emoji shortcodes are not offered; typing `:joy:` works as ordinary text.
+**Links.** Selecting text that is already a link makes a **Link** card appear at the top of the Properties tab, showing its address: edit it there, or remove the link (select across several links and you can set or remove them all at once). The Insert tab is for **new** links only: with text selected, "Link selected text" turns it into a link; with only a cursor, "Insert new link" adds new linked text there (or, if there is no cursor, as a new paragraph). Its address box starts empty and is never filled in from an existing link. For whole blocks, Properties has "Link whole block" (one address for every selected block) and "Remove all links". **Ctrl/Cmd + K** jumps to the right place: the link's address if you are on a link, otherwise the new-link box. Only `http`, `https`, `mailto`, `tel` and relative addresses are accepted.
+
+**Insert tab** (laid out like the [Markdown cheat sheet](https://www.markdownguide.org/cheat-sheet/)): select text to make it bold, italic, strikethrough, code, highlight, subscript or superscript, add a footnote (the `[^1]` reference and its definition at the end); and add a heading (H1-H6), paragraph, quote, bullet, numbered or task item, horizontal rule, definition, fenced code block with a language, table of any size, or image. New blocks go after or before the selection, or at the end. Emoji shortcodes are not offered; typing `:joy:` works as ordinary text.
 
 **Reordering.** Drag the grip at the left of a block; if several blocks are selected they move together. Move up / Move down in the panel does the same from the keyboard.
 

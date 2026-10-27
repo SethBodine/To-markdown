@@ -261,6 +261,12 @@ export default function App() {
           <Editor blocks={blocks} onChange={setBlocks} pdfDoc={pdfDoc} />
         </>
       )}
+      <footer className="app-footer">
+        <a href="https://github.com/SethBodine/To-markdown" target="_blank" rel="noopener noreferrer">
+          Source code on GitHub
+        </a>
+        <span> | MIT licensed | files never leave your browser</span>
+      </footer>
     </div>
   );
 }

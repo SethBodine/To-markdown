@@ -25,5 +25,14 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.8"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SethBodine/To-markdown.git"
+  },
+  "homepage": "https://github.com/SethBodine/To-markdown",
+  "bugs": {
+    "url": "https://github.com/SethBodine/To-markdown/issues"
+  },
+  "license": "MIT"
 }

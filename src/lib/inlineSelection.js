@@ -8,7 +8,7 @@ import { useSyncExternalStore } from 'react';
 import { normalizeHref, isSafeHref, domToMarkdown } from './inlineMarkdown.js';
 
 const EMPTY = {
-  hasEditor: false, hasText: false, bold: false, italic: false, strike: false,
+  hasEditor: false, hasText: false, text: '', linkCount: 0, bold: false, italic: false, strike: false,
   sub: false, sup: false, code: false, mark: false, link: false, href: '',
 };
 let snapshot = EMPTY;
@@ -28,30 +28,49 @@ function editorOf(node) {
 function compute() {
   const sel = window.getSelection();
   const active = document.activeElement;
-  const inPanel = !!(active && active.closest && active.closest('.side-panel'));
+  // Focus (or the browser's selection) sitting in the side panel, for example in the link address
+  // box, is not "the person clicked away": keep the current selection context.
+  const inPanelEl = (n) => {
+    const el = n && (n.nodeType === 1 ? n : n.parentElement);
+    return !!(el && el.closest && el.closest('.side-panel'));
+  };
+  const inPanel = inPanelEl(active) || (!!sel && inPanelEl(sel.anchorNode));
   const clear = () => {
     if (inPanel) return;
     last = null;
     if (snapshot !== EMPTY) emit(EMPTY);
   };
   if (!sel || !sel.rangeCount) return clear();
-  const range = sel.getRangeAt(0);
-  const { el, editor } = editorOf(range.commonAncestorContainer);
+  const raw = sel.getRangeAt(0);
+  const startEd = editorOf(raw.startContainer).editor;
+  const endEd = editorOf(raw.endContainer).editor;
+  const editor = startEd || endEd;
   if (!editor) return clear();
-  last = { el: editor, range: range.cloneRange() };
+  // A selection can run past the edge of one block (a triple-click, or a drag beyond the end of
+  // the line). It still belongs to that block, so clamp it to the block's own text.
+  const range = raw.cloneRange();
+  if (startEd !== editor) range.setStart(editor, 0);
+  if (endEd !== editor) range.setEnd(editor, editor.childNodes.length);
+  last = { el: editor, range };
   const q = (c) => {
     try { return document.queryCommandState(c); } catch { return false; }
   };
-  const a = el.closest('a');
+  const { el } = editorOf(range.commonAncestorContainer);
+  const anchors = Array.from(editor.querySelectorAll('a')).filter((a) => range.intersectsNode(a));
   emit({
     hasEditor: true,
     hasText: !range.collapsed,
+    text: range.toString().replace(/\s+/g, ' ').trim().slice(0, 80),
     bold: q('bold'), italic: q('italic'), strike: q('strikeThrough'),
     sub: q('subscript'), sup: q('superscript'),
-    code: !!el.closest('code'), mark: !!el.closest('mark'),
-    link: !!a, href: a ? a.getAttribute('href') || '' : '',
+    code: !!(el && el.closest('code')), mark: !!(el && el.closest('mark')),
+    link: anchors.length > 0,
+    linkCount: anchors.length,
+    href: anchors.length ? anchors[0].getAttribute('href') || '' : '',
   });
 }
+
+export const getSelectionSnapshot = () => snapshot;
 
 export function installSelectionTracking() {
   document.addEventListener('selectionchange', compute);
@@ -144,10 +163,56 @@ export function applyLink(rawUrl) {
 export function removeLink() {
   const sel = restore();
   if (!sel) return false;
-  const { el } = editorOf(sel.getRangeAt(0).commonAncestorContainer);
-  const existing = el && el.closest('a');
-  if (existing && last.el.contains(existing)) unwrap(existing);
-  else document.execCommand('unlink');
+  const range = sel.getRangeAt(0);
+  const anchors = Array.from(last.el.querySelectorAll('a')).filter((a) => range.intersectsNode(a));
+  anchors.forEach(unwrap);
+  compute();
+  return anchors.length > 0;
+}
+
+// Change the address of every link the selection touches. Returns an error message or null.
+export function setLinkHref(raw) {
+  const url = normalizeHref(raw);
+  if (!url) return 'Enter a web address, or use Remove link.';
+  if (!isSafeHref(url)) return 'That address type is not allowed. Use http, https, mailto or tel.';
+  if (!last || !last.el.isConnected) return 'Select the link text again.';
+  const anchors = Array.from(last.el.querySelectorAll('a')).filter((a) => last.range.intersectsNode(a));
+  if (!anchors.length) return 'Select the link text again.';
+  anchors.forEach((a) => {
+    a.setAttribute('href', url);
+    a.setAttribute('rel', 'noopener noreferrer');
+  });
+  const el = last.el;
+  // The block saves its text when it loses focus, so hand the change over now.
+  el.focus({ preventScroll: true });
+  el.blur();
+  compute();
+  return null;
+}
+
+// Insert brand-new linked text at the cursor (replacing any selection). False if there is no
+// text box to put it in.
+export function insertLinkAtCaret(label, url) {
+  const sel = restore();
+  if (!sel) return false;
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  const host = editorOf(range.startContainer).el;
+  const inside = host && host.closest('a');
+  if (inside) {
+    range.setStartAfter(inside); // links can't nest
+    range.collapse(true);
+  }
+  const a = document.createElement('a');
+  a.setAttribute('href', url);
+  a.setAttribute('rel', 'noopener noreferrer');
+  a.textContent = label;
+  range.insertNode(a);
+  const after = document.createRange();
+  after.setStartAfter(a);
+  after.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(after);
   compute();
   return true;
 }

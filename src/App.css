@@ -431,3 +431,11 @@ kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--border); bo
   font: 13px/1.55 'SF Mono', Consolas, 'Liberation Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .md-area:focus { outline: 1px solid var(--accent); }
+
+/* ---- links panel, footer ---- */
+.link-card { padding: 14px 14px 12px; border-bottom: 1px solid var(--border); background: #fdf8f4; }
+.link-card h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.linkish { border: 0; background: none; padding: 0; font: inherit; color: #1a5fb4; text-decoration: underline; cursor: pointer; }
+.app-footer { margin-top: 28px; padding: 14px 0 26px; text-align: center; font-size: 12px; color: var(--text-muted); }
+.app-footer a { color: inherit; text-decoration: underline; }
+.app-footer a:hover { color: var(--accent); }

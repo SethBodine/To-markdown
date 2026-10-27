@@ -99,6 +99,11 @@ export default function EditableInline({
   const handleKeyDown = (e) => {
     const el = ref.current;
     if (e.nativeEvent.isComposing) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('tomd-link')); // the editor opens the right link panel
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       if (!onSplit) return;

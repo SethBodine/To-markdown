@@ -339,3 +339,21 @@ export function inlineSource(block) {
 export function normalizeMd(md, plain) {
   return md === escapeText(plain) ? null : md;
 }
+
+// ---- links inside a block's Markdown ----
+
+export function hasLinks(md) {
+  const walk = (nodes) => nodes.some((n) => n.t === 'link' || (n.c && walk(n.c)));
+  return walk(parseInline(md || ''));
+}
+
+// The same text with every link removed (the words stay, the addresses go).
+export function stripLinks(md, doc = document) {
+  const holder = doc.createElement('div');
+  holder.appendChild(buildInlineDom(md, doc));
+  holder.querySelectorAll('a').forEach((a) => {
+    while (a.firstChild) a.parentNode.insertBefore(a.firstChild, a);
+    a.remove();
+  });
+  return domToMarkdown(holder);
+}

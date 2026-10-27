@@ -7,8 +7,8 @@ import {
   isTextBlock, LIST_TYPES, TYPE_CHANGEABLE, nextId,
   titleBlocks, titleAsH1Active, clampedHeadingCount, applyTitleAsH1, revertTitleAsH1,
 } from '../lib/blockModel.js';
-import { inlineSource, mdToPlain, normalizeMd } from '../lib/inlineMarkdown.js';
-import { installSelectionTracking, insertFootnoteRef, splitAtSelection } from '../lib/inlineSelection.js';
+import { inlineSource, mdToPlain, normalizeMd, escapeText, encodeHref, normalizeHref, isSafeHref, hasLinks, stripLinks } from '../lib/inlineMarkdown.js';
+import { installSelectionTracking, insertFootnoteRef, splitAtSelection, insertLinkAtCaret, getSelectionSnapshot } from '../lib/inlineSelection.js';
 import { blocksToMarkdown } from '../lib/markdownExport.js';
 import { CODE_LANGS } from '../lib/codeLangs.js';
 // extractTableFromRegion is imported dynamically inside handleCreateTableFromRegion:
@@ -41,8 +41,23 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
   const anchorRef = useRef(null);
   const nonceRef = useRef(0);
   const dragIdsRef = useRef([]);
+  const rangeIdsRef = useRef([]); // the blocks added by the last Shift-range
 
   useEffect(() => installSelectionTracking(), []);
+
+  // Ctrl/Cmd+K in a block: edit the link under the cursor (Properties), or make a new one (Insert).
+  useEffect(() => {
+    const open = () => {
+      const s = getSelectionSnapshot();
+      setTab(s.link ? 'properties' : 'insert');
+      setTimeout(() => {
+        const el = document.getElementById(s.link ? 'link-edit-url' : 'link-url-input');
+        if (el) el.focus();
+      }, 60);
+    };
+    window.addEventListener('tomd-link', open);
+    return () => window.removeEventListener('tomd-link', open);
+  }, []);
 
   // One entry in the undo history per change. Accepts new blocks, or a function
   // of the current blocks.
@@ -110,15 +125,27 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
   const clampedCount = useMemo(() => clampedHeadingCount(blocks), [blocks]);
 
   // ---- selection ----
-  const selectRange = (id) => {
+  // Shift (on a block or on its tick box) selects everything from the last block you clicked or
+  // ticked to this one. Blocks you picked one at a time stay selected; a new Shift range replaces
+  // the previous Shift range, so you can widen or shrink it.
+  const applyShift = (id) => {
     const list = blocksRef.current;
-    const a = list.findIndex((b) => b.id === anchorRef.current);
-    const z = list.findIndex((b) => b.id === id);
-    if (a < 0 || z < 0) return false;
-    setSelectedIds(list.slice(Math.min(a, z), Math.max(a, z) + 1).map((b) => b.id));
-    return true;
+    const from = list.findIndex((b) => b.id === anchorRef.current);
+    const to = list.findIndex((b) => b.id === id);
+    if (from < 0 || to < 0) {
+      toggleId(id);
+      return;
+    }
+    const range = list.slice(Math.min(from, to), Math.max(from, to) + 1).map((b) => b.id);
+    const previous = rangeIdsRef.current;
+    setSelectedIds((prev) => {
+      const base = prev.filter((x) => !previous.includes(x));
+      return [...base, ...range.filter((x) => !base.includes(x))];
+    });
+    rangeIdsRef.current = range;
   };
   const toggleId = (id) => {
+    rangeIdsRef.current = [];
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
     anchorRef.current = id;
   };
@@ -129,16 +156,22 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
     mouseDown(e, id) {
       if (e.shiftKey || e.ctrlKey || e.metaKey) {
         e.preventDefault(); // no text selection / caret move while building a block selection
-        if (!(e.shiftKey && selectRange(id))) toggleId(id);
+        if (e.shiftKey) applyShift(id);
+        else toggleId(id);
       }
     },
     click(e, id) {
       if (e.shiftKey || e.ctrlKey || e.metaKey) return;
       if (selectedRef.current.length === 1 && selectedRef.current[0] === id) return;
+      rangeIdsRef.current = [];
       setSelectedIds([id]);
       anchorRef.current = id;
     },
     toggle: toggleId,
+    checkClick(e, id) {
+      if (e.shiftKey) applyShift(id);
+      else toggleId(id);
+    },
     commitText(id, md, plain) {
       commit((prev) => prev.map((b) => (b.id === id ? { ...b, md: normalizeMd(md, plain), text: plain, confidence: 1 } : b)));
     },
@@ -258,7 +291,7 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
     },
   };
   const ops = useMemo(() => {
-    const names = ['mouseDown', 'click', 'toggle', 'commitText', 'commitField', 'commitCode', 'update', 'split',
+    const names = ['mouseDown', 'click', 'toggle', 'checkClick', 'commitText', 'commitField', 'commitCode', 'update', 'split',
       'mergeBack', 'navigate', 'tab', 'dragStart', 'dragOver', 'drop', 'dragEnd'];
     return Object.fromEntries(names.map((n) => [n, (...a) => opsRef.current[n](...a)]));
   }, []);
@@ -335,7 +368,58 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
       commit((prev) => prev.filter((b) => !drop.has(b.id)).map((b) => (b.id === keep ? { ...b, text: plain, md: normalizeMd(md, plain), confidence: 1 } : b)));
       setSelectedIds([keep]);
     },
-    clear: () => setSelectedIds([]),
+    clear: () => {
+      rangeIdsRef.current = [];
+      setSelectedIds([]);
+    },
+    // Make the whole text of each selected block a link to one address.
+    linkBlocks: (raw) => {
+      const url = normalizeHref(raw);
+      if (!url) return 'Enter a web address first.';
+      if (!isSafeHref(url)) return 'That address type is not allowed. Use http, https, mailto or tel.';
+      mapSelected((b) => {
+        if (!FLAGGABLE.has(b.type)) return b;
+        const inner = stripLinks(inlineSource(b));
+        if (!inner.trim()) return b;
+        return { ...b, md: `[${inner}](${encodeHref(url)})`, confidence: 1 };
+      });
+      return '';
+    },
+    // Remove every link from the selected blocks (the words stay).
+    unlinkBlocks: () => mapSelected((b) => {
+      if (!FLAGGABLE.has(b.type)) return b;
+      const src = inlineSource(b);
+      if (!hasLinks(src)) return b;
+      return { ...b, md: normalizeMd(stripLinks(src), b.text), confidence: 1 };
+    }),
+    // Insert brand-new linked text at the cursor, or into the selected block, or as a new paragraph.
+    insertLink: (text, raw) => {
+      const url = normalizeHref(raw);
+      if (!url) return 'Enter a web address first.';
+      if (!isSafeHref(url)) return 'That address type is not allowed. Use http, https, mailto or tel.';
+      const label = (text || '').trim() || String(raw).trim();
+      if (insertLinkAtCaret(label, url)) return '';
+      const md = `[${escapeText(label)}](${encodeHref(url)})`;
+      const only = selectedBlocks.length === 1 && FLAGGABLE.has(selectedBlocks[0].type) ? selectedBlocks[0] : null;
+      if (only) {
+        const cur = inlineSource(only);
+        const next = cur ? `${cur} ${md}` : md;
+        const plain = mdToPlain(next);
+        commit((prev) => prev.map((b) => (b.id === only.id ? { ...b, text: plain, md: normalizeMd(next, plain), confidence: 1 } : b)));
+        return '';
+      }
+      const nb = createBlock('paragraph');
+      nb.text = label;
+      nb.md = md;
+      commit((prev) => {
+        const idx = prev.map((b, i) => (selectedRef.current.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+        const at = idx.length ? Math.max(...idx) + 1 : prev.length;
+        return [...prev.slice(0, at), nb, ...prev.slice(at)];
+      });
+      setSelectedIds([nb.id]);
+      anchorRef.current = nb.id;
+      return '';
+    },
     insert: (kind, opts = {}, position = 'after') => {
       flushActive();
       const nb = createBlock(kind, opts);

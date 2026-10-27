@@ -177,8 +177,8 @@ function BlockView({ block, selected, listNumber, focus, dropPos, ops }) {
         aria-checked={selected}
         aria-label="Select this block"
         className={`block-check ${selected ? 'on' : ''}`}
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); ops.toggle(id); }}
+        onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+        onClick={(e) => { e.stopPropagation(); ops.checkClick(e, id); }}
       />
       {content}
     </div>
