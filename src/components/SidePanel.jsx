@@ -49,7 +49,7 @@ function Actions({ api, many }) {
 }
 
 // Shown whenever the text selection or cursor is inside a link: edit its address or remove it.
-function LinkCard() {
+function LinkCard({ multi }) {
   const sel = useInlineSelection();
   const [msg, setMsg] = useState('');
   useEffect(() => setMsg(''), [sel.href, sel.linkCount]);
@@ -59,13 +59,14 @@ function LinkCard() {
       <h4>{sel.linkCount > 1 ? `${sel.linkCount} links in the selection` : 'Link'}</h4>
       <label className="field">
         <span>Web address{sel.linkCount > 1 ? ' (sets all of them)' : ''}</span>
-        <CommitInput id="link-edit-url" value={sel.href} onCommit={(v) => setMsg(setLinkHref(v) || '')} />
+        <CommitInput id="link-edit-url" disabled={multi} value={sel.href} onCommit={(v) => setMsg(setLinkHref(v) || '')} />
       </label>
       <div className="action-row">
-        <button className="btn small danger" onClick={() => { removeLink(); setMsg(''); }}>
+        <button className="btn small danger" disabled={multi} onClick={() => { removeLink(); setMsg(''); }}>
           {sel.linkCount > 1 ? 'Remove these links' : 'Remove link'}
         </button>
       </div>
+      {multi && <p className="hint">Several blocks are selected, so use Remove all links below to unlink them all.</p>}
       {msg && <p className="panel-msg" role="alert">{msg}</p>}
     </div>
   );
@@ -113,7 +114,9 @@ function Help() {
       <h4>Editing</h4>
       <ul className="help-list">
         <li><kbd>Enter</kbd> splits a block, <kbd>Backspace</kbd> at the start joins it to the one above</li>
-        <li><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> indents a list item</li>
+        <li><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> indents list items and moves headings down or up a level, on every selected block</li>
+        <li><kbd>Shift</kbd> + <kbd>Up</kbd>/<kbd>Down</kbd> extends the selection one block at a time</li>
+        <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>Z</kbd> undoes and <kbd>Y</kbd> redoes, even while typing</li>
         <li>Drag the grip at the left of a block to reorder it</li>
         <li>Use the Insert tab for links, tables, code and more</li>
       </ul>
@@ -369,7 +372,7 @@ export default function SidePanel({ tab, setTab, selected, api }) {
         <Insert api={api} setTab={setTab} />
       ) : (
         <>
-          <LinkCard />
+          <LinkCard multi={selected.length > 1} />
           {selected.length === 0 ? (
             <Help />
           ) : selected.length === 1 ? (

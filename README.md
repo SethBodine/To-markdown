@@ -46,9 +46,15 @@ Everything on the page is editable in place; there is no separate edit mode.
 
 **Selecting blocks.** Click a block, **Ctrl/Cmd + click** to add or remove one, or tick the box at its left. **Shift + click** (on a block or on its tick box, the two behave identically) selects everything from the last block you clicked or ticked. Blocks you picked one at a time stay selected, and a new Shift range replaces the previous Shift range, so you can widen or shrink it. **Ctrl/Cmd + A** selects everything and **Esc** clears. With several blocks selected, the Properties panel changes the type of all of them, toggles bold/italic, indents list items, links or unlinks them, merges them into one block, and moves, duplicates or deletes them.
 
-**Editing text.** Type directly. **Enter** splits a block at the caret (on an empty list item it outdents, then leaves the list), **Backspace** at the start joins a block to the one above (or turns a heading/list item back into a paragraph), **Tab / Shift+Tab** indents a list item, and the arrow keys move between blocks. Pasting inserts plain text only. Undo and Redo cover every change, including bulk ones.
+**Editing text.** Type directly. **Enter** splits a block at the caret (on an empty list item it outdents, then leaves the list), **Backspace** at the start joins a block to the one above (or turns a heading/list item back into a paragraph), **Tab / Shift+Tab** indents or outdents list items (and moves headings down or up a level), on every selected block at once, and the arrow keys move between blocks. Pasting inserts plain text only. Undo and Redo cover every change, including bulk ones, and **Ctrl/Cmd+Z**, **Ctrl/Cmd+Y** (or Ctrl/Cmd+Shift+Z) work everywhere, including while typing: what you type becomes one Undo step after a short pause, when you leave the block, or the moment you press Ctrl+Z. The Undo/Redo row stays at the top of the window as you scroll.
 
 **Links.** Selecting text that is already a link makes a **Link** card appear at the top of the Properties tab, showing its address: edit it there, or remove the link (select across several links and you can set or remove them all at once). The Insert tab is for **new** links only: with text selected, "Link selected text" turns it into a link; with only a cursor, "Insert new link" adds new linked text there (or, if there is no cursor, as a new paragraph). Its address box starts empty and is never filled in from an existing link. For whole blocks, Properties has "Link whole block" (one address for every selected block) and "Remove all links". **Ctrl/Cmd + K** jumps to the right place: the link's address if you are on a link, otherwise the new-link box. Only `http`, `https`, `mailto`, `tel` and relative addresses are accepted.
+
+**Selecting with the keyboard.** **Shift+Up / Shift+Down** extends the block selection one block at a time, from the first or last line of a block (and from anywhere once several blocks are selected). Clicking the page background, outside the document and the tools, clears the selection.
+
+**Word styles.** A Word document can use paragraph styles with no Markdown equivalent (TOC Heading, toc 1, Caption, custom styles). They are listed above the toolbar with a dropdown each: choose what that style should become and every paragraph in it changes at once (a trailing number in the style name sets the list indent, so "toc 2" becomes a second-level bullet). It can be undone. DOCX only.
+
+**Recovery.** The document you are working on, with its full undo and redo history (and the original PDF, so Source view still works), is saved in this browser as you go. If you close the tab by accident, reopening the page picks up where you left off. **Close and forget** (in the header, or in the restored-session note) deletes the saved copy.
 
 **Insert tab** (laid out like the [Markdown cheat sheet](https://www.markdownguide.org/cheat-sheet/)): select text to make it bold, italic, strikethrough, code, highlight, subscript or superscript, add a footnote (the `[^1]` reference and its definition at the end); and add a heading (H1-H6), paragraph, quote, bullet, numbered or task item, horizontal rule, definition, fenced code block with a language, table of any size, or image. New blocks go after or before the selection, or at the end. Emoji shortcodes are not offered; typing `:joy:` works as ordinary text.
 
@@ -82,6 +88,8 @@ The block list has no virtualization (every block is a real DOM node). Measured 
 - **Inline formatting is kept for DOCX, HTML, EPUB and Markdown, but not for ODT, PDF or XLSX**, whose readers still produce plain text per block (you can add formatting yourself in the editor). Table cells are plain text: no links or emphasis inside a cell.
 - **The Markdown tab reads text back into blocks.** Everything the editor can produce round-trips, including heading anchors and definition lists, but raw HTML, reference-style links and nested block quotes are simplified or dropped, and per-block details such as PDF source positions and review flags are reset when the text is re-read.
 - **Changing type on selected text splits the block** (Markdown has no inline heading), so a selected word becomes its own block between the two halves.
+- **The recovery copy is stored as plain data in the browser.** Anyone with access to the same browser profile could read it, and the browser may clear it. Use Close and forget for sensitive documents or shared machines.
+- **Word style mapping is for DOCX only** (ODT, HTML and EPUB styles are not offered) and is not remembered between documents.
 - **Images are referenced, not extracted.** An `<img>` (or a Markdown image) becomes an image block holding its alt text and URL. Pictures embedded inside a DOCX or EPUB have no URL, so they come through as flagged image blocks with the URL left blank for you to fill in or delete. The editor never loads image URLs (nothing leaves your browser), it shows a placeholder.
 - **XLSX header-row detection is a convention, not a fact.** Spreadsheets don't semantically mark a header row the way a real document format does, so the first row of each sheet is assumed to be the header, flagged with middling confidence for review in the table editor.
 
@@ -138,7 +146,7 @@ Full dependency license list in `NOTICE.md`.
 
 ## Privacy
 
-File contents never leave the browser. No upload endpoint exists in this codebase — parsing, classification, editing, and markdown generation all run client-side in JavaScript.
+File contents never leave the browser. The one thing kept is a recovery copy of the document you are working on, with its undo history, in this browser's own storage (IndexedDB); it is never sent anywhere, and **Close and forget** deletes it. On a shared computer, use Close and forget when you finish. No upload endpoint exists in this codebase — parsing, classification, editing, and markdown generation all run client-side in JavaScript.
 
 ## Roadmap
 

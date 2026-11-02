@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { buildInlineDom, domToMarkdown } from '../lib/inlineMarkdown.js';
 
-// One editable run of formatted text. React renders an *empty* element and the
-// content is built into it directly (see the layout effect), so React never
-// has to reconcile DOM the browser edited underneath it. The text is turned
-// back into Markdown when the person leaves the block, never on every key.
+// One editable run of formatted text. React renders an *empty* element and the content is built
+// into it directly (see the layout effect), so React never has to reconcile DOM the browser edited
+// underneath it. Typing is turned back into Markdown when you pause for a moment or leave the
+// block, which is what makes Undo step back through your typing in sensible pieces.
 
 export function placeCaret(el, where) {
   el.focus();
@@ -42,12 +42,14 @@ function caretAtStart(el) {
   return r.toString() === '';
 }
 
+// Whether the moving end of the selection (the caret, or the end you are dragging with Shift) is
+// on the first or last line of the block.
 function caretLineEdge(el) {
   const sel = window.getSelection();
-  if (!sel || !sel.rangeCount || !sel.isCollapsed || !el.contains(sel.anchorNode)) {
-    return { first: false, last: false };
-  }
-  const range = sel.getRangeAt(0).cloneRange();
+  if (!sel || !sel.rangeCount || !sel.focusNode || !el.contains(sel.focusNode)) return { first: false, last: false };
+  const range = document.createRange();
+  range.setStart(sel.focusNode, sel.focusOffset);
+  range.collapse(true);
   const elRect = el.getBoundingClientRect();
   const rects = range.getClientRects();
   const rect = rects.length ? rects[0] : null;
@@ -67,19 +69,26 @@ function caretLineEdge(el) {
   };
 }
 
+const IDLE_COMMIT_MS = 900;
+
 export default function EditableInline({
   source, tag: Tag = 'div', className = '', style, placeholder, focus,
-  onCommit, onSplit, onMergeBack, onNavigate, onTab,
+  onCommit, onSplit, onMergeBack, onNavigate, onTab, onExtend, onHistory,
 }) {
   const ref = useRef(null);
   const built = useRef(false);
+  const idle = useRef(null);
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (!built.current || domToMarkdown(el) !== source) {
+    // Compared without surrounding spaces: a trailing space you have just typed is not a reason to rebuild.
+    if (!built.current || domToMarkdown(el).trim() !== source.trim()) {
       el.replaceChildren(buildInlineDom(source));
       built.current = true;
+      if (document.activeElement === el) placeCaret(el, 'end'); // keep typing where you were
     }
   }, [source, Tag]);
 
@@ -88,7 +97,10 @@ export default function EditableInline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus && focus.nonce]);
 
+  useEffect(() => () => clearTimeout(idle.current), []);
+
   const commit = () => {
+    clearTimeout(idle.current);
     const el = ref.current;
     if (!el || !onCommit) return;
     const md = domToMarkdown(el).trim();
@@ -99,9 +111,25 @@ export default function EditableInline({
   const handleKeyDown = (e) => {
     const el = ref.current;
     if (e.nativeEvent.isComposing) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    const k = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && k === 'k') {
       e.preventDefault();
       window.dispatchEvent(new CustomEvent('tomd-link')); // the editor opens the right link panel
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === 'z' || k === 'y') && onHistory) {
+      e.preventDefault();
+      commit(); // anything typed since the last pause becomes one step first, so Undo can take it back
+      onHistory(k === 'y' || e.shiftKey ? 'redo' : 'undo');
+      // If undoing lands on exactly the state the app already holds, React sees no change and does
+      // not redraw, which would leave the text you just typed on screen. Re-sync the text ourselves.
+      setTimeout(() => {
+        const node = ref.current;
+        if (node && domToMarkdown(node).trim() !== sourceRef.current.trim()) {
+          node.replaceChildren(buildInlineDom(sourceRef.current));
+          placeCaret(node, 'end');
+        }
+      }, 0);
       return;
     }
     if (e.key === 'Enter') {
@@ -116,17 +144,26 @@ export default function EditableInline({
       tail.selectNodeContents(el);
       tail.setStart(range.endContainer, range.endOffset);
       const frag = tail.extractContents();
+      clearTimeout(idle.current);
       onSplit(domToMarkdown(el).trim(), domToMarkdown(frag).trim());
       return;
     }
     if (e.key === 'Backspace' && onMergeBack && caretAtStart(el)) {
       e.preventDefault();
+      clearTimeout(idle.current);
       onMergeBack(domToMarkdown(el).trim());
       return;
     }
     if (e.key === 'Tab' && onTab) {
       e.preventDefault();
       onTab(e.shiftKey ? -1 : 1);
+      return;
+    }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && onExtend) {
+      // Shift+Up/Down: past the first or last line, it extends the selection to the next block.
+      const edge = caretLineEdge(el);
+      const atEdge = e.key === 'ArrowUp' ? edge.first : edge.last;
+      if (onExtend(e.key === 'ArrowUp' ? 'up' : 'down', atEdge)) e.preventDefault();
       return;
     }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && onNavigate && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
@@ -152,6 +189,8 @@ export default function EditableInline({
       onKeyDown={handleKeyDown}
       onInput={() => {
         if (ref.current && !ref.current.textContent) ref.current.replaceChildren();
+        clearTimeout(idle.current);
+        idle.current = setTimeout(commit, IDLE_COMMIT_MS);
       }}
       onPaste={(e) => {
         e.preventDefault();

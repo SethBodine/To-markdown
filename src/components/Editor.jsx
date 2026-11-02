@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import BlockView from './BlockView.jsx';
 import SidePanel from './SidePanel.jsx';
 import PdfSourceView from './PdfSourceView.jsx';
+import StyleMapper from './StyleMapper.jsx';
 import {
   insertTableAtRegion, makeTableBlock, makeBlock, createBlock, applyBlockType, cloneBlock,
-  isTextBlock, LIST_TYPES, TYPE_CHANGEABLE, nextId,
+  isTextBlock, LIST_TYPES, TYPE_CHANGEABLE, nextId, applyStyleTarget,
   titleBlocks, titleAsH1Active, clampedHeadingCount, applyTitleAsH1, revertTitleAsH1,
 } from '../lib/blockModel.js';
 import { inlineSource, mdToPlain, normalizeMd, escapeText, encodeHref, normalizeHref, isSafeHref, hasLinks, stripLinks } from '../lib/inlineMarkdown.js';
@@ -19,7 +20,20 @@ const MERGEABLE = new Set(['heading', 'paragraph', 'bullet', 'numbered', 'task',
 const DRAG_TYPE = 'application/x-to-markdown-blocks';
 const HISTORY_LIMIT = 200;
 
-export default function Editor({ blocks, onChange, pdfDoc }) {
+// Indent or outdent one block. List items change level; headings move down/up a heading level.
+function shiftIndent(b, delta) {
+  if (LIST_TYPES.has(b.type)) {
+    const level = Math.max(0, Math.min(8, (b.level || 0) + delta));
+    return level === (b.level || 0) ? b : { ...b, level, confidence: 1 };
+  }
+  if (b.type === 'heading') {
+    const level = Math.max(1, Math.min(6, (b.level || 1) + delta));
+    return level === b.level ? b : { ...b, level, confidence: 1 };
+  }
+  return b;
+}
+
+export default function Editor({ blocks, onChange, pdfDoc, historyRef: externalHistory }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [view, setView] = useState('structured'); // 'structured' | 'markdown' | 'source'
   const [tab, setTab] = useState('properties');
@@ -37,11 +51,14 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
   blocksRef.current = blocks;
   const selectedRef = useRef(selectedIds);
   selectedRef.current = selectedIds;
-  const historyRef = useRef({ past: [], future: [] });
+  // The history normally comes from App, which saves it with the document; the fallback keeps the editor usable on its own.
+  const ownHistory = useRef({ past: [], future: [] });
+  const historyRef = externalHistory || ownHistory;
   const anchorRef = useRef(null);
   const nonceRef = useRef(0);
   const dragIdsRef = useRef([]);
   const rangeIdsRef = useRef([]); // the blocks added by the last Shift-range
+  const focusIdRef = useRef(null); // the moving end of a Shift selection
 
   useEffect(() => installSelectionTracking(), []);
 
@@ -143,11 +160,13 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
       return [...base, ...range.filter((x) => !base.includes(x))];
     });
     rangeIdsRef.current = range;
+    focusIdRef.current = id;
   };
   const toggleId = (id) => {
     rangeIdsRef.current = [];
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
     anchorRef.current = id;
+    focusIdRef.current = id;
   };
 
   // ---- operations used by blocks (kept stable; see `ops` below) ----
@@ -166,6 +185,7 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
       rangeIdsRef.current = [];
       setSelectedIds([id]);
       anchorRef.current = id;
+      focusIdRef.current = id;
     },
     toggle: toggleId,
     checkClick(e, id) {
@@ -257,9 +277,28 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
       setSelectedIds([list[i].id]);
       requestFocus(list[i].id, dir === 'up' ? 'end' : 'start');
     },
+    // Tab / Shift+Tab: indent or outdent. With several blocks selected it applies to all of them.
     tab(id, delta) {
-      commit((prev) => prev.map((b) => (b.id === id && LIST_TYPES.has(b.type)
-        ? { ...b, level: Math.max(0, Math.min(8, (b.level || 0) + delta)) } : b)));
+      const ids = selectedRef.current.length > 1 && selectedRef.current.includes(id) ? selectedRef.current : [id];
+      commit((prev) => {
+        let changed = false;
+        const next = prev.map((b) => {
+          if (!ids.includes(b.id)) return b;
+          const moved = shiftIndent(b, delta);
+          if (moved !== b) changed = true;
+          return moved;
+        });
+        return changed ? next : prev; // nothing could move: no empty entry in the undo history
+      });
+    },
+    // Shift+Up/Down: from the first/last line of a block (or once several are selected), extend the selection.
+    extend(id, dir, atEdge) {
+      if (atEdge || selectedRef.current.length > 1) return extendSelection(dir, id);
+      return false;
+    },
+    history(kind) {
+      if (kind === 'redo') redo();
+      else undo();
     },
     // ---- drag to reorder ----
     dragStart(e, id) {
@@ -291,7 +330,7 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
     },
   };
   const ops = useMemo(() => {
-    const names = ['mouseDown', 'click', 'toggle', 'checkClick', 'commitText', 'commitField', 'commitCode', 'update', 'split',
+    const names = ['mouseDown', 'click', 'toggle', 'checkClick', 'extend', 'history', 'commitText', 'commitField', 'commitCode', 'update', 'split',
       'mergeBack', 'navigate', 'tab', 'dragStart', 'dragOver', 'drop', 'dragEnd'];
     return Object.fromEntries(names.map((n) => [n, (...a) => opsRef.current[n](...a)]));
   }, []);
@@ -461,7 +500,22 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
     }
   }, [focusReq]);
 
-  // Keyboard shortcuts that apply when you're not typing in a field.
+  // Clicking the page background (outside the document and the tools) clears the selection.
+  useEffect(() => {
+    if (view !== 'structured') return undefined;
+    const onDown = (e) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest('.block-list, .side-panel, .editor-toolbar, .option-bar, .style-bar, .header-actions, .export-options, .restored-note, .notices, .warnings, .app-footer, button, input, select, textarea, label, a, summary')) return;
+      rangeIdsRef.current = [];
+      setSelectedIds([]);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [view]);
+
+  // Keyboard shortcuts that apply when you're not typing in a field. (Inside a text block,
+  // Ctrl/Cmd+Z, Ctrl/Cmd+Y, Tab and Shift+Up/Down are handled by the block itself.)
   useEffect(() => {
     if (view !== 'structured') return undefined;
     const onKey = (e) => {
@@ -470,24 +524,32 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
         || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button'].includes(a.type)));
       if (e.key === 'Escape') {
         if (typing && a.blur) a.blur();
+        rangeIdsRef.current = [];
         setSelectedIds([]);
         return;
       }
       if (typing) return;
       const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedRef.current.length) {
         e.preventDefault();
         commit((prev) => prev.filter((b) => !selectedRef.current.includes(b.id)));
         setSelectedIds([]);
-      } else if (mod && e.key.toLowerCase() === 'z') {
+      } else if (mod && key === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo(); else undo();
-      } else if (mod && e.key.toLowerCase() === 'y') {
+      } else if (mod && key === 'y') {
         e.preventDefault();
         redo();
-      } else if (mod && e.key.toLowerCase() === 'a') {
+      } else if (mod && key === 'a') {
         e.preventDefault();
         setSelectedIds(blocksRef.current.map((b) => b.id));
+      } else if (e.shiftKey && !mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && selectedRef.current.length) {
+        e.preventDefault();
+        extendSelection(e.key === 'ArrowUp' ? 'up' : 'down');
+      } else if (e.key === 'Tab' && selectedRef.current.length && a === document.body) {
+        e.preventDefault();
+        opsRef.current.tab(selectedRef.current[0], e.shiftKey ? -1 : 1);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -512,6 +574,27 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
       setTableBusy(false);
     }
   }, [commit, pdfDoc]);
+
+  // Extend the block selection one block up or down from the moving end of the current selection.
+  function extendSelection(dir, fromId) {
+    const list = blocksRef.current;
+    if (!list.length) return false;
+    if (!anchorRef.current || !list.some((b) => b.id === anchorRef.current)) {
+      anchorRef.current = fromId || selectedRef.current[0] || list[0].id;
+    }
+    const current = focusIdRef.current && list.some((b) => b.id === focusIdRef.current) ? focusIdRef.current : anchorRef.current;
+    const at = list.findIndex((b) => b.id === current);
+    const to = Math.max(0, Math.min(list.length - 1, at + (dir === 'up' ? -1 : 1)));
+    applyShift(list[to].id);
+    const el = document.querySelector(`[data-block-id="${list[to].id}"]`);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    return true;
+  }
+
+  // Map every paragraph in a Word style to a Markdown type.
+  function mapStyle(name, target) {
+    commit((prev) => prev.map((b) => (b.docStyle === name ? applyStyleTarget(b, target) : b)));
+  }
 
   function partialTypeChange(b, part, value) {
     const piece = (md) => {
@@ -587,6 +670,9 @@ export default function Editor({ blocks, onChange, pdfDoc }) {
               : ''}
           </span>
         </label>
+      )}
+      {view === 'structured' && (
+        <StyleMapper blocks={blocks} onMap={mapStyle} />
       )}
       <div className="editor-toolbar">
         <button className="btn" onClick={undo} disabled={!h.past.length}>Undo</button>

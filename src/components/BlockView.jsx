@@ -83,6 +83,8 @@ function BlockView({ block, selected, listNumber, focus, dropPos, ops }) {
     onMergeBack: (md) => ops.mergeBack(id, md),
     onNavigate: (dir) => ops.navigate(id, dir),
     onTab: (d) => ops.tab(id, d),
+    onExtend: (dir, atEdge) => ops.extend(id, dir, atEdge),
+    onHistory: (kind) => ops.history(kind),
   };
 
   let content = null;

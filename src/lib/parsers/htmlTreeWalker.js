@@ -8,10 +8,10 @@ import { domToMarkdown, escapeText } from '../inlineMarkdown.js';
 // treatment for headings/lists/tables/quotes rather than three slightly
 // different reimplementations drifting apart over time.
 
-export function elementsToBlocks(containerElement, { format, confidence = 0.9 }) {
+export function elementsToBlocks(containerElement, { format, confidence = 0.9, styleNames = null }) {
   const blocks = [];
   for (const node of containerElement.children) {
-    const result = elementToBlock(node, { format, confidence });
+    const result = elementToBlock(node, { format, confidence, styleNames });
     if (!result) continue;
     if (result.multi) blocks.push(...result.multi);
     else blocks.push(result);
@@ -97,6 +97,9 @@ function elementToBlock(node, ctx) {
       // treating it as H1 (see applyTitleAsH1 in blockModel.js).
       return makeBlock({ type: 'paragraph', text, isTitle: true, confidence: ctx.confidence, source });
     }
+    // A Word paragraph style with no Markdown equivalent was tagged "mdstyle-N" by the DOCX reader.
+    const styleClass = node.classList ? Array.from(node.classList).find((c) => /^mdstyle-\d+$/.test(c)) : null;
+    const docStyle = styleClass && ctx.styleNames ? ctx.styleNames[Number(styleClass.slice(8))] || '' : '';
     // A paragraph that is entirely one bold/italic run keeps the simple
     // whole-block flag; anything with partial formatting or links keeps its
     // inline Markdown instead.
@@ -105,7 +108,7 @@ function elementToBlock(node, ctx) {
     const bold = !!wholeTextMatches && onlyChild.tagName === 'STRONG';
     const italic = !!wholeTextMatches && onlyChild.tagName === 'EM';
     const md = bold || italic ? null : inlineMd(node, text);
-    return makeBlock({ type: 'paragraph', text, md, bold, italic, confidence: ctx.confidence, source });
+    return makeBlock({ type: 'paragraph', text, md, bold, italic, docStyle, confidence: ctx.confidence, source });
   }
 
   if (tag === 'pre' || tag === 'code') {

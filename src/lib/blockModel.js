@@ -49,6 +49,8 @@ export function makeBlock(partial) {
     isTitle: false, // Word "Title" style paragraph
     titleApplied: false, // Title has been promoted to H1
     titleShift: 0, // 1 = heading moved down a level, -1 = was H6 and could not move
+    docStyle: '', // name of a Word paragraph style with no Markdown equivalent
+    docStyleTarget: '', // what the person mapped that style to ('' = left as a paragraph)
     confidence: 1,
     source: { format: 'unknown', page: null },
     ...partial,
@@ -215,4 +217,23 @@ export function createBlock(kind, opts = {}) {
     }
     default: return makeBlock({ type: 'paragraph', source });
   }
+}
+
+// ---- Word styles with no Markdown equivalent ------------------------------
+
+export const STYLE_TARGETS = [
+  { value: '', label: 'Paragraph (no change)' },
+  ...BLOCK_TYPES.filter((t) => t.value !== 'paragraph'),
+];
+
+// Turn one block into the mapped type. For list targets a trailing number in the style name sets
+// the indent ("toc 2" -> second level), the way Word's own contents styles nest.
+export function applyStyleTarget(block, target) {
+  if (!target) return { ...block, type: 'paragraph', level: 0, docStyleTarget: '', confidence: 1 };
+  const next = applyBlockType({ ...block, docStyleTarget: target }, target);
+  if (LIST_TYPES.has(next.type)) {
+    const n = /(\d+)\s*$/.exec(block.docStyle || '');
+    next.level = n ? Math.max(0, Math.min(8, Number(n[1]) - 1)) : 0;
+  }
+  return next;
 }

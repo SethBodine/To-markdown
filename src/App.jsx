@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { blocksToMarkdown, countHeadingClamps } from './lib/markdownExport.js';
+import { saveSession, savePdf, loadSession, clearSession } from './lib/session.js';
 import Editor from './components/Editor.jsx';
 import './App.css';
 
@@ -27,7 +28,7 @@ const ZIP_FORMATS = new Set(['docx', 'odt', 'epub', 'xlsx']);
 export default function App() {
   const [blocks, setBlocks] = useState(null);
   const [fileName, setFileName] = useState('');
-  const [status, setStatus] = useState('idle'); // idle | parsing | ready | error
+  const [status, setStatus] = useState('restoring'); // restoring | idle | parsing | ready | error
   const [error, setError] = useState(null);
   const [warnings, setWarnings] = useState([]);
   const [notices, setNotices] = useState([]);
@@ -38,6 +39,19 @@ export default function App() {
     frontMatterOn: false,
     fm: { title: '', author: '', date: '', tags: '', description: '' },
   });
+
+  // The undo/redo history lives here (not in the editor) so it can be saved and restored with the document.
+  const historyRef = useRef({ past: [], future: [] });
+  const latestBlocks = useRef(null); // always the newest blocks, even before React has re-rendered
+  const pdfBytesRef = useRef(null); // the original PDF, kept so Source view works after a restore
+  const metaRef = useRef({});
+  const [restored, setRestored] = useState(null); // { fileName, savedAt } when this session was brought back
+  const [saveInfo, setSaveInfo] = useState(null); // null | { at } | 'error'
+  const updateBlocks = useCallback((next) => {
+    latestBlocks.current = next;
+    setBlocks(next);
+  }, []);
+  metaRef.current = { fileName, notices, warnings, exportOpts };
 
   // Safety net for the whole page: without this, dropping a file anywhere
   // outside the two designated drop targets (the idle-state Dropzone, or the
@@ -57,6 +71,85 @@ export default function App() {
     };
   }, []);
 
+  // ---- recovery copy: bring back the last session on start, and keep saving as you work ----
+  const saveNow = useCallback(async () => {
+    const current = latestBlocks.current;
+    if (!current) return;
+    const m = metaRef.current;
+    try {
+      await saveSession({
+        v: 1, fileName: m.fileName, blocks: current,
+        past: historyRef.current.past, future: historyRef.current.future,
+        notices: m.notices, warnings: m.warnings, exportOpts: m.exportOpts, savedAt: Date.now(),
+      });
+      setSaveInfo({ at: Date.now() });
+    } catch {
+      setSaveInfo('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await loadSession();
+        if (cancelled) return;
+        if (!saved || !saved.state || !Array.isArray(saved.state.blocks)) {
+          setStatus('idle');
+          return;
+        }
+        const s = saved.state;
+        historyRef.current = { past: s.past || [], future: s.future || [] };
+        latestBlocks.current = s.blocks;
+        setBlocks(s.blocks);
+        setFileName(s.fileName || 'document');
+        setNotices(s.notices || []);
+        setWarnings(s.warnings || []);
+        if (s.exportOpts) setExportOpts(s.exportOpts);
+        if (saved.pdfBytes) {
+          pdfBytesRef.current = saved.pdfBytes;
+          try {
+            const { loadPdfDocument } = await import('./lib/parsers/pdfParser.js');
+            const doc = await loadPdfDocument(saved.pdfBytes.slice(0));
+            if (!cancelled) setPdfDoc(doc);
+          } catch {
+            /* the text is restored even if the page images cannot be */
+          }
+        }
+        if (cancelled) return;
+        setRestored({ fileName: s.fileName || 'document', savedAt: s.savedAt || Date.now() });
+        setSaveInfo({ at: s.savedAt || Date.now() });
+        setStatus('ready');
+      } catch {
+        if (!cancelled) setStatus('idle');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (status !== 'ready' || !blocks) return undefined;
+    const t = setTimeout(saveNow, 1000);
+    return () => clearTimeout(t);
+  }, [blocks, exportOpts, status, saveNow]);
+
+  // Closing the tab: hand over a half-typed edit and save straight away.
+  useEffect(() => {
+    const flush = () => {
+      if (!latestBlocks.current) return;
+      const a = document.activeElement;
+      if (a && a.isContentEditable && a.blur) a.blur();
+      saveNow();
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [saveNow]);
+
   const handleFile = useCallback(async (file) => {
     if (!file) return;
     setStatus('parsing');
@@ -64,6 +157,10 @@ export default function App() {
     setWarnings([]);
     setNotices([]);
     setFileName(file.name);
+    historyRef.current = { past: [], future: [] }; // a new document starts a new history
+    latestBlocks.current = null;
+    pdfBytesRef.current = null;
+    setRestored(null);
 
     try {
       const ext = file.name.split('.').pop().toLowerCase();
@@ -84,19 +181,19 @@ export default function App() {
         const { parseDocx } = await import('./lib/parsers/docxParser.js');
         const { blocks: parsed, warnings: w } = await parseDocx(buffer);
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'odt') {
         const { parseOdt } = await import('./lib/parsers/odtParser.js');
         const { blocks: parsed, warnings: w } = await parseOdt(buffer);
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'epub') {
         const { parseEpub } = await import('./lib/parsers/epubParser.js');
         const { blocks: parsed, warnings: w } = await parseEpub(buffer);
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setWarnings(w);
         setNotices(['Images inside EPUB chapters are not extracted yet — see the README roadmap.']);
       } else if (ext === 'xlsx' || ext === 'xls') {
@@ -106,7 +203,7 @@ export default function App() {
         const { parseXlsx } = await import('./lib/parsers/xlsxParser.js');
         const { blocks: parsed, warnings: w } = await parseXlsx(buffer);
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setWarnings(w);
         setNotices([
           'Spreadsheets have no concept of a "header row" in the file itself — the first row of each sheet is assumed to be the header. Check this in the table editor if it looks wrong.',
@@ -116,19 +213,21 @@ export default function App() {
         const text = new TextDecoder('utf-8').decode(buffer);
         const { blocks: parsed, warnings: w } = await parseHtml(text);
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'md' || ext === 'markdown') {
         const { parseMarkdown } = await import('./lib/parsers/markdownParser.js');
         const text = new TextDecoder('utf-8').decode(buffer);
         const { blocks: parsed, warnings: w } = await parseMarkdown(text);
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setWarnings(w);
       } else if (ext === 'pdf') {
         const { loadPdfDocument, extractPdfLines } = await import('./lib/parsers/pdfParser.js');
         const { classifyPdfLines } = await import('./lib/classifier.js');
+        const pdfCopy = buffer.slice(0); // pdf.js may take over the original buffer
         const doc = await loadPdfDocument(buffer);
+        pdfBytesRef.current = pdfCopy;
         const lines = await extractPdfLines(doc);
         const parsed = classifyPdfLines(lines);
 
@@ -145,7 +244,7 @@ export default function App() {
         }
 
         resultBlocks = parsed;
-        setBlocks(parsed);
+        updateBlocks(parsed);
         setPdfDoc(doc);
 
         setNotices([
@@ -172,12 +271,13 @@ export default function App() {
       }
 
       setStatus('ready');
+      savePdf(pdfBytesRef.current || null).catch(() => setSaveInfo('error'));
     } catch (err) {
       console.error(err);
       setError(err.message || 'Something went wrong while reading this file.');
       setStatus('error');
     }
-  }, []);
+  }, [updateBlocks]);
 
   const handleDownload = useCallback(() => {
     const markdown = blocksToMarkdown(blocks, toExportConfig(exportOpts));
@@ -199,7 +299,19 @@ export default function App() {
     setWarnings([]);
     setNotices([]);
     setPdfDoc(null);
+    historyRef.current = { past: [], future: [] };
+    latestBlocks.current = null;
+    pdfBytesRef.current = null;
+    setRestored(null);
+    setSaveInfo(null);
   }, []);
+
+  // Close the document and delete the recovery copy kept in this browser.
+  const closeAndForget = useCallback(async () => {
+    if (historyRef.current.past.length && !window.confirm('Close this document and forget the saved copy? Your edits and undo history will be lost.')) return;
+    await clearSession().catch(() => {});
+    reset();
+  }, [reset]);
 
   return (
     <div className="app">
@@ -212,14 +324,26 @@ export default function App() {
         </div>
         {status === 'ready' && (
           <div className="header-actions">
+            {saveInfo && (
+              <span className="save-status" role="status">
+                {saveInfo === 'error'
+                  ? 'Not saved: browser storage is unavailable'
+                  : `Saved in this browser at ${new Date(saveInfo.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+              </span>
+            )}
             <HeaderFileControl onFile={handleFile} />
             <ExportOptions blocks={blocks} opts={exportOpts} setOpts={setExportOpts} fileName={fileName} />
+            <button className="btn" onClick={closeAndForget} title="Close this document and delete the copy saved in this browser">
+              Close and forget
+            </button>
             <button className="btn btn-primary" onClick={handleDownload}>
               Download .md
             </button>
           </div>
         )}
       </header>
+
+      {status === 'restoring' && <p className="hint">Checking for a saved session...</p>}
 
       {status === 'idle' && <Dropzone onFile={handleFile} />}
 
@@ -240,6 +364,19 @@ export default function App() {
 
       {status === 'ready' && blocks && (
         <>
+          {restored && (
+            <div className="restored-note">
+              <span>
+                <strong>Picked up where you left off:</strong> {restored.fileName}, saved{' '}
+                {new Date(restored.savedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Your undo
+                and redo history came back with it.
+              </span>
+              <span className="restored-actions">
+                <button className="linkish" onClick={closeAndForget}>Close and forget it</button>
+                <button className="linkish" onClick={() => setRestored(null)}>Dismiss</button>
+              </span>
+            </div>
+          )}
           {notices.length > 0 && (
             <div className="notices">
               {notices.map((n, i) => (
@@ -258,7 +395,7 @@ export default function App() {
               ))}
             </div>
           )}
-          <Editor blocks={blocks} onChange={setBlocks} pdfDoc={pdfDoc} />
+          <Editor blocks={blocks} onChange={updateBlocks} pdfDoc={pdfDoc} historyRef={historyRef} />
         </>
       )}
       <footer className="app-footer">
